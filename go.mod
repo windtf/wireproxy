@@ -1,8 +1,7 @@
 module github.com/pufferffish/wireproxy
 
 go 1.21.1
-
-toolchain go1.21.6
+toolchain go1.24.1
 
 require (
 	github.com/MakeNowJust/heredoc/v2 v2.0.1
@@ -17,8 +16,8 @@ require (
 
 require (
 	github.com/google/btree v1.1.2 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/crypto v0.35.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gvisor.dev/gvisor v0.0.0-20230927004350-cbd86285d259 // indirect
