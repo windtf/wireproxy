@@ -8,10 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
-	"golang.zx2c4.com/wireguard/device"
 	"io"
 	"log"
 	"math/rand"
@@ -23,6 +19,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
+	"golang.zx2c4.com/wireguard/device"
 
 	"github.com/things-go/go-socks5"
 	"github.com/things-go/go-socks5/bufferpool"
@@ -43,10 +44,11 @@ type CredentialValidator struct {
 
 // VirtualTun stores a reference to netstack network and DNS configuration
 type VirtualTun struct {
-	Tnet      *netstack.Net
-	Dev       *device.Device
-	SystemDNS bool
-	Conf      *DeviceConfig
+	Tnet          *netstack.Net
+	Dev           *device.Device
+	SystemDNS     bool
+	Conf          *DeviceConfig
+	ResolveConfig *ResolveConfig
 	// PingRecord stores the last time an IP was pinged
 	PingRecord     map[string]uint64
 	PingRecordLock *sync.Mutex
@@ -79,33 +81,48 @@ func (d VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*n
 		return nil, err
 	}
 
-	size := len(addrs)
-	if size == 0 {
-		return nil, errors.New("no address found for: " + name)
-	}
+	addrs_v4 := []netip.Addr{}
+	addrs_v6 := []netip.Addr{}
 
-	rand.Shuffle(size, func(i, j int) {
-		addrs[i], addrs[j] = addrs[j], addrs[i]
-	})
-
-	var addr netip.Addr
 	for _, saddr := range addrs {
-		addr, err = netip.ParseAddr(saddr)
+		addr, err := netip.ParseAddr(saddr)
 		if err == nil {
-			break
+			if addr.Is4() {
+				addrs_v4 = append(addrs_v4, addr)
+			} else if addr.Is6() {
+				addrs_v6 = append(addrs_v6, addr)
+			}
 		}
 	}
 
-	if err != nil {
-		return nil, err
+	rand.Shuffle(len(addrs_v4), func(i, j int) {
+		addrs_v4[i], addrs_v4[j] = addrs_v4[j], addrs_v4[i]
+	})
+	rand.Shuffle(len(addrs_v6), func(i, j int) {
+		addrs_v6[i], addrs_v6[j] = addrs_v6[j], addrs_v6[i]
+	})
+
+	addrs_all := []netip.Addr{}
+
+	switch d.ResolveConfig.ResolveStrategy {
+	case "ipv4":
+		addrs_all = append(addrs_v4, addrs_v6...)
+	case "ipv6":
+		addrs_all = append(addrs_v6, addrs_v4...)
 	}
 
-	return &addr, nil
+	if len(addrs_all) == 0 {
+		return nil, errors.New("no address found for: " + name)
+	}
+
+	return &addrs_all[0], nil
 }
 
 // Resolve resolves a hostname and returns an IP.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	log.Printf("Resolving address for %s\n", name)
+
 	addr, err := d.ResolveAddrWithContext(ctx, name)
 	if err != nil {
 		return nil, nil, err

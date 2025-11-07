@@ -60,8 +60,9 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 }
 
 // StartWireguard creates a tun interface on netstack given a configuration
-func StartWireguard(conf *DeviceConfig, logLevel int) (*VirtualTun, error) {
-	setting, err := CreateIPCRequest(conf)
+func StartWireguard(conf *Configuration, logLevel int) (*VirtualTun, error) {
+	deviceConf := conf.Device
+	setting, err := CreateIPCRequest(deviceConf)
 	if err != nil {
 		return nil, err
 	}
@@ -81,10 +82,29 @@ func StartWireguard(conf *DeviceConfig, logLevel int) (*VirtualTun, error) {
 		return nil, err
 	}
 
+	hasV4 := false
+	hasV6 := false
+	for _, addr := range setting.DeviceAddr {
+		if addr.Is4() {
+			hasV4 = true
+		}
+		if addr.Is6() {
+			hasV6 = true
+		}
+	}
+
+	if conf.Resolve.ResolveStrategy == "auto" {
+		if hasV4 && !hasV6 {
+			conf.Resolve.ResolveStrategy = "ipv4"
+		} else {
+			conf.Resolve.ResolveStrategy = "ipv6"
+		}
+	}
 	return &VirtualTun{
 		Tnet:           tnet,
 		Dev:            dev,
-		Conf:           conf,
+		Conf:           deviceConf,
+		ResolveConfig:  conf.Resolve,
 		SystemDNS:      len(setting.DNS) == 0,
 		PingRecord:     make(map[string]uint64),
 		PingRecordLock: new(sync.Mutex),

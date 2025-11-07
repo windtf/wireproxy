@@ -59,9 +59,14 @@ type HTTPConfig struct {
 	Password    string
 }
 
+type ResolveConfig struct {
+	ResolveStrategy string
+}
+
 type Configuration struct {
 	Device   *DeviceConfig
 	Routines []RoutineSpawner
+	Resolve  *ResolveConfig
 }
 
 func parseString(section *ini.Section, keyName string) (string, error) {
@@ -175,7 +180,7 @@ func parseCIDRNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) 
 		if len(str) == 0 {
 			continue
 		}
-    
+
 		if addr, err := netip.ParseAddr(str); err == nil {
 			ips = append(ips, addr)
 		} else {
@@ -183,7 +188,7 @@ func parseCIDRNetIP(section *ini.Section, keyName string) ([]netip.Addr, error) 
 			if err != nil {
 				return nil, err
 			}
-      
+
 			addr := prefix.Addr()
 			ips = append(ips, addr)
 		}
@@ -435,6 +440,15 @@ func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 	return config, nil
 }
 
+func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
+	config := &ResolveConfig{}
+
+	resolvStrategy, _ := parseString(section, "ResolveStrategy")
+	config.ResolveStrategy = resolvStrategy
+
+	return config, nil
+}
+
 // Takes a function that parses an individual section into a config, and apply it on all
 // specified sections
 func parseRoutinesConfig(routines *[]RoutineSpawner, cfg *ini.File, sectionName string, f func(*ini.Section) (RoutineSpawner, error)) error {
@@ -470,6 +484,10 @@ func ParseConfig(path string) (*Configuration, error) {
 
 	device := &DeviceConfig{
 		MTU: 1420,
+	}
+
+	resolve := &ResolveConfig{
+		ResolveStrategy: "auto",
 	}
 
 	root := cfg.Section("")
@@ -519,8 +537,16 @@ func ParseConfig(path string) (*Configuration, error) {
 		return nil, err
 	}
 
+	if resolveSection, err := cfg.GetSection("Resolve"); err == nil {
+		resolve, err = parseResolveConfig(resolveSection)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Configuration{
 		Device:   device,
 		Routines: routinesSpawners,
+		Resolve:  resolve,
 	}, nil
 }
