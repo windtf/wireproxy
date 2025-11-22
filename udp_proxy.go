@@ -36,6 +36,23 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 	sessions := make(map[string]*udpSession)
 	var sessionMu sync.Mutex
 
+	closeSessionChan := func(sess *udpSession) {
+		select {
+		case <-sess.closeChan:
+		default:
+			close(sess.closeChan)
+		}
+	}
+
+	removeSession := func(src string, sess *udpSession) {
+		sessionMu.Lock()
+		if current, ok := sessions[src]; ok && current == sess {
+			closeSessionChan(current)
+			delete(sessions, src)
+		}
+		sessionMu.Unlock()
+	}
+
 	// Periodically clean up expired sessions if inactivity timeout is enabled
 	if conf.InactivityTimeout > 0 {
 		go func() {
@@ -47,7 +64,7 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 				for key, sess := range sessions {
 					if now.Sub(sess.lastActive) >= inactivityDur {
 						log.Printf("UDPProxyTunnel: closing inactive session for %s", key)
-						close(sess.closeChan)
+						closeSessionChan(sess)
 						delete(sessions, key)
 					}
 				}
@@ -82,7 +99,7 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 		sessions[srcAddr] = s
 
 		// Spin up a goroutine to handle traffic from remote -> local
-		go conf.handleRemoteToLocal(listener, srcAddr, s)
+		go conf.handleRemoteToLocal(listener, srcAddr, s, removeSession)
 		return s, nil
 	}
 
@@ -114,8 +131,9 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 
 // handles data from the remote WireGuard side back to the local client
 // this function blocks until the session is closed
-func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, srcAddr string, s *udpSession) {
+func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, srcAddr string, s *udpSession, removeSession func(string, *udpSession)) {
 	defer func() {
+		removeSession(srcAddr, s)
 		_ = s.remoteConn.Close()
 	}()
 	buf := make([]byte, 64*1024)
