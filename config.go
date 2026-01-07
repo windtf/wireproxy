@@ -40,6 +40,8 @@ type TCPClientTunnelConfig struct {
 
 type STDIOTunnelConfig struct {
 	Target string
+	Input  *os.File
+	Output *os.File
 }
 
 type TCPServerTunnelConfig struct {
@@ -377,6 +379,8 @@ func parseSTDIOTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 		return nil, err
 	}
 	config.Target = targetSection
+	config.Input = os.Stdin
+	config.Output = os.Stdout
 
 	return config, nil
 }
