@@ -47,25 +47,41 @@ else
     LOCAL_WG_PORT=$WIRE_PORT
 fi
 
-echo -e "${BLUE}Discovering NAT mapping using local port $LOCAL_WG_PORT...${NC}"
+echo -ne "${BLUE}Discovering NAT mapping... ${NC}"
 # Try multiple servers if one is down
 STUN_SERVERS=("stun.l.google.com:19302" "stunserver.org:3478" "stun.voip.blackberry.com:3478")
 STUN_OUT=""
+STUN_ERRORS=""
 
 for s in "${STUN_SERVERS[@]}"; do
     server=$(echo $s | cut -d':' -f1)
     port=$(echo $s | cut -d':' -f2)
-    STUN_OUT=$(stunclient --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "")
-    if [[ "$STUN_OUT" == *"Mapped address"* ]]; then
+    echo -ne "${YELLOW}.${NC}"
+    
+    # Use timeout only if available (GNU coreutils, usually missing on macOS)
+    if command -v timeout &> /dev/null; then
+        TMP_OUT=$(timeout 5 stunclient --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "Error: Timeout")
+    else
+        # Fallback for macOS: no timeout (relying on stunclient internal timeout)
+        TMP_OUT=$(stunclient --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "Error: stunclient failed")
+    fi
+    
+    if [[ "$TMP_OUT" == *"Mapped address"* ]]; then
+        STUN_OUT="$TMP_OUT"
         break
+    else
+        STUN_ERRORS+="\n - $s: $(echo "$TMP_OUT" | head -n 1)"
     fi
 done
+echo -e " ${GREEN}Done!${NC}"
 
 PUB_IP=$(echo "$STUN_OUT" | grep -oE "Mapped address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" | cut -d' ' -f3 | cut -d':' -f1 || echo "")
 PUB_PORT=$(echo "$STUN_OUT" | grep -oE "Mapped address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" | cut -d' ' -f3 | cut -d':' -f2 || echo "")
 
 if [[ -z "$PUB_IP" || -z "$PUB_PORT" ]]; then
-    echo -e "${YELLOW}Warning: STUN discovery failed. Falling back to simple IP discovery.${NC}"
+    echo -e "${YELLOW}Warning: STUN discovery failed.${NC}"
+    echo -e "${RED}Detailed Errors:${NC}${STUN_ERRORS}"
+    echo -e "${YELLOW}Falling back to simple IP discovery.${NC}"
     PUB_IP=$(curl -s https://api.ipify.org || echo "unknown")
     PUB_PORT=$LOCAL_WG_PORT
 fi
@@ -130,15 +146,14 @@ echo -e "${YELLOW}CONNECTION:${NC} ${CYAN}$PUB_IP:$PUB_PORT:$PUB${NC}"
 echo -e "${GREEN}---------------------------------------------------${NC}\n"
 
 # Start a background "Hole Maintainer" to keep the NAT mapping from expiring
-# while the user is typing the peer information.
 (
     while true; do
-        # Sending a tiny packet to the stun server to keep the mapping active
         stunclient --localport $LOCAL_WG_PORT stun.l.google.com 19302 &> /dev/null
         sleep 20
     done
-) &
+) &>/dev/null &
 MAINTAINER_PID=$!
+disown $MAINTAINER_PID 2>/dev/null || true
 cleanup() {
     # Disable the trap to prevent recursion
     trap - INT TERM EXIT
