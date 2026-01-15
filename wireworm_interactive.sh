@@ -31,25 +31,57 @@ PRIV=$(wg genkey)
 PUB=$(echo "$PRIV" | wg pubkey)
 PUB_IP=$(curl -s https://api.ipify.org || echo "unknown")
 
+# --- Validation Functions ---
+validate_ip() {
+    local ip=$1
+    # Simple regex for IPv4 or hostname
+    if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || [[ $ip =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+validate_port() {
+    if [[ $1 =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; then
+        return 0
+    fi
+    return 1
+}
+
+validate_pubkey() {
+    # WireGuard keys are 44 chars including base64 padding
+    if [[ $1 =~ ^[a-zA-Z0-9+/]{42,43}=$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+sanitize() {
+    echo "$1" | tr -d '[:cntrl:]' | xargs
+}
+
 # 3. Mode Selection
-echo -e "${BLUE}Who are you?${NC}"
-echo "1) Sender   (I have a file to send)"
-echo "2) Receiver (I want to download a file)"
-echo -ne "${YELLOW}Select [1-2]: ${NC}"
-read MODE
+while true; do
+    echo -e "${BLUE}Who are you?${NC}"
+    echo "1) Sender   (I have a file to send)"
+    echo "2) Receiver (I want to download a file)"
+    echo -ne "${YELLOW}Select [1-2]: ${NC}"
+    read MODE
+    MODE=$(sanitize "$MODE")
+    if [[ "$MODE" == "1" || "$MODE" == "2" ]]; then break; fi
+    echo -e "${RED}Invalid selection.${NC}"
+done
 
 if [[ "$MODE" == "1" ]]; then
     ROLE="sender"
     WG_IP="10.0.0.1/32"
     PEER_WG_IP="10.0.0.2/32"
     LOCAL_WG_PORT=51820
-    TUNNEL_INFO="Exposing local file server on WireGuard:9000"
 else
     ROLE="receiver"
     WG_IP="10.0.0.2/32"
     PEER_WG_IP="10.0.0.1/32"
     LOCAL_WG_PORT=51820
-    TUNNEL_INFO="Mapping remote file server to localhost:9001"
 fi
 
 echo -e "\n${GREEN}--- YOUR SIGNAL DATA (Share this with your peer) ---${NC}"
@@ -60,19 +92,36 @@ echo -e "${GREEN}---------------------------------------------------${NC}\n"
 
 # 4. Input Peer Data
 echo -e "${BLUE}Enter Peer Information:${NC}"
-echo -ne "${YELLOW}Peer Public IP: ${NC}"
-read PEER_IP
-echo -ne "${YELLOW}Peer UDP Port:  ${NC}"
-read PEER_PORT
-echo -ne "${YELLOW}Peer Public Key: ${NC}"
-read PEER_PUB
+while true; do
+    echo -ne "${YELLOW}Peer Public IP: ${NC}"
+    read PEER_IP
+    PEER_IP=$(sanitize "$PEER_IP")
+    if validate_ip "$PEER_IP"; then break; fi
+    echo -e "${RED}Invalid IP or Hostname.${NC}"
+done
+
+while true; do
+    echo -ne "${YELLOW}Peer UDP Port:  ${NC}"
+    read PEER_PORT
+    PEER_PORT=$(sanitize "$PEER_PORT")
+    if validate_port "$PEER_PORT"; then break; fi
+    echo -e "${RED}Invalid Port (1-65535).${NC}"
+done
+
+while true; do
+    echo -ne "${YELLOW}Peer Public Key: ${NC}"
+    read PEER_PUB
+    PEER_PUB=$(sanitize "$PEER_PUB")
+    if validate_pubkey "$PEER_PUB"; then break; fi
+    echo -e "${RED}Invalid WireGuard Public Key.${NC}"
+done
 
 # 5. File selection for sender
 FILE_TO_SEND=""
 if [[ "$ROLE" == "sender" ]]; then
     echo -ne "${YELLOW}File path to send (drag file here): ${NC}"
     read FILE_INPUT
-    FILE_TO_SEND=$(echo "$FILE_INPUT" | sed "s/'//g" | sed 's/\\//g') # Clean drag-and-drop paths
+    FILE_TO_SEND=$(echo "$FILE_INPUT" | sed "s/'//g" | sed 's/\\//g' | xargs)
     if [ ! -f "$FILE_TO_SEND" ]; then
         echo -e "${YELLOW}File not found. Using default dummy file.${NC}"
         FILE_TO_SEND="wormhole_package.txt"
