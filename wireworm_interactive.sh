@@ -214,59 +214,70 @@ fi
 ./wireproxy -c wireworm.conf -i 127.0.0.1:8081 > wireproxy.log 2>&1 &
 WIREPROXY_PID=$!
 
-# Handshake Monitor Loop
-echo -e "${BLUE}Monitoring Connection Status...${NC}"
-(
-    CONNECTED=false
-    while kill -0 $WIREPROXY_PID 2>/dev/null; do
-        METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
-        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs || echo "0")
-        
-        # Ensure HANDSHAKE is a valid number
-        if [[ ! "$HANDSHAKE" =~ ^[0-9]+$ ]]; then HANDSHAKE=0; fi
-
-        if [ "$HANDSHAKE" -gt 0 ]; then
-            if [ "$CONNECTED" = false ]; then
-                echo -e "\n${GREEN}====================================================${NC}"
-                echo -e "${GREEN}         🚀 SUCCESS: HOLE PUNCHED!                 ${NC}"
-                echo -e "${GREEN}====================================================${NC}"
-                
-                if [[ "$OSTYPE" == "darwin"* ]]; then
-                    HS_TIME=$(date -r "$HANDSHAKE" 2>/dev/null || echo "Unknown")
-                else
-                    HS_TIME=$(date -d @"$HANDSHAKE" 2>/dev/null || echo "Unknown")
-                fi
-                echo -e "${CYAN}Handshake established at: $HS_TIME${NC}"
-                echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
-                CONNECTED=true
-            fi
-
-            if [[ "$SUB_MODE" == "file" ]]; then
-                if [[ "$ROLE" == "joiner" ]]; then
-                    echo -e "${GREEN}You can now run the curl command in another terminal.${NC}"
-                fi
-                # Handshake succeeded, we can slow down metrics polling significantly
-                sleep 30
-            else
-                echo -e "${GREEN}Starting Chat Session...${NC}"
-                if [[ "$ROLE" == "host" ]]; then
-                    go run test_utils/wireworm_chat.go server 8082
-                else
-                    go run test_utils/wireworm_chat.go client 127.0.0.1:9003
-                fi
-                # Once chat exits, kill everything
-                kill $WIREPROXY_PID 2>/dev/null || true
-                exit 0
-            fi
-        else
-            echo -ne "${YELLOW}Listening for peer... (No handshake yet) \r${NC}"
-        fi
-        sleep 2
-    done
-) &
-MONITOR_PID=$!
-
 # Handle shutdown
 trap 'kill $WIREPROXY_PID $SERVER_PID $MAINTAINER_PID $MONITOR_PID 2>/dev/null || true; exit' INT TERM EXIT
 
-wait $WIREPROXY_PID
+# Handshake Monitor Loop
+if [[ "$SUB_MODE" == "file" ]]; then
+    echo -e "${BLUE}Monitoring Connection Status...${NC}"
+    (
+        CONNECTED=false
+        while kill -0 $WIREPROXY_PID 2>/dev/null; do
+            METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
+            HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs || echo "0")
+            if [[ ! "$HANDSHAKE" =~ ^[0-9]+$ ]]; then HANDSHAKE=0; fi
+
+            if [ "$HANDSHAKE" -gt 0 ]; then
+                if [ "$CONNECTED" = false ]; then
+                    echo -e "\n${GREEN}====================================================${NC}"
+                    echo -e "${GREEN}         🚀 SUCCESS: HOLE PUNCHED!                 ${NC}"
+                    echo -e "${GREEN}====================================================${NC}"
+                    if [[ "$OSTYPE" == "darwin"* ]]; then
+                        HS_TIME=$(date -r "$HANDSHAKE" 2>/dev/null || echo "Unknown")
+                    else
+                        HS_TIME=$(date -d @"$HANDSHAKE" 2>/dev/null || echo "Unknown")
+                    fi
+                    echo -e "${CYAN}Handshake established at: $HS_TIME${NC}"
+                    echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
+                    if [[ "$ROLE" == "joiner" ]]; then
+                        echo -e "${GREEN}You can now run the curl command in another terminal.${NC}"
+                    fi
+                    CONNECTED=true
+                fi
+                sleep 30
+            else
+                echo -ne "${YELLOW}Listening for peer... (No handshake yet) \r${NC}"
+            fi
+            sleep 2
+        done
+    ) &
+    MONITOR_PID=$!
+    wait $WIREPROXY_PID
+else
+    # Chat mode: Monitor in foreground, then launch chat
+    echo -e "${BLUE}Waiting for peer to connect...${NC}"
+    while kill -0 $WIREPROXY_PID 2>/dev/null; do
+        METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
+        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs || echo "0")
+        if [[ ! "$HANDSHAKE" =~ ^[0-9]+$ ]]; then HANDSHAKE=0; fi
+
+        if [ "$HANDSHAKE" -gt 0 ]; then
+            echo -e "\n${GREEN}🚀 SUCCESS: HOLE PUNCHED!${NC}"
+            echo -e "${GREEN}Starting Chat Session...${NC}"
+            # Kill the maintainer before chat starts to avoid port use/interference
+            kill $MAINTAINER_PID 2>/dev/null || true
+            if [[ "$ROLE" == "host" ]]; then
+                go run test_utils/wireworm_chat.go server 8082
+            else
+                go run test_utils/wireworm_chat.go client 127.0.0.1:9003
+            fi
+            break
+        fi
+        echo -ne "${YELLOW}Listening for peer... (No handshake yet) \r${NC}"
+        sleep 2
+    done
+    
+    # Cleanup and exit cleanly
+    kill $WIREPROXY_PID 2>/dev/null || true
+    exit 0
+fi
