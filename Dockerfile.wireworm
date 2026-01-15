@@ -11,13 +11,12 @@ RUN apt-get update && apt-get install -y \
     make \
     libboost-dev \
     libssl-dev \
-    curl \
+    git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/stuntman
-RUN curl -L https://github.com/jselbie/stunserver/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1
-RUN make
+RUN git clone https://github.com/jselbie/stunserver.git . && make
 
 # Final image
 FROM docker.io/golang:1.21-bookworm
