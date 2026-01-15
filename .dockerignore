@@ -2,5 +2,11 @@
 .github
 .gitignore
 Dockerfile
+Dockerfile.wireworm
 LICENSE
 README.md
+wireproxy
+wireworm.conf
+wireproxy.log
+*.txt
+*.bin

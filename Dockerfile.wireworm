@@ -35,12 +35,16 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy binaries from build stages
-COPY --from=build-wireproxy /usr/src/wireproxy/wireproxy /usr/bin/wireproxy
+# Placing wireproxy in /app ensures the bash script finds the correct Linux binary
+COPY --from=build-wireproxy /usr/src/wireproxy/wireproxy /app/wireproxy
 COPY --from=build-stuntman /usr/src/stuntman/stunclient /usr/bin/stunclient
 COPY --from=build-stuntman /usr/src/stuntman/stunserver /usr/bin/stunserver
 
 # Copy source for 'go run' utilities
+# Use a specific list or ensure we don't overwrite the correctly built binary
 COPY . /app/
+# Re-copy the correct binary JUST in case the 'COPY . /app/' overwrote it with a host binary
+COPY --from=build-wireproxy /usr/src/wireproxy/wireproxy /app/wireproxy
 
 # Ensure scripts are executable
 RUN chmod +x /app/wireworm_interactive.sh /app/wireworm.sh
