@@ -97,24 +97,28 @@ sanitize() {
 
 # 3. Mode Selection
 while true; do
-    echo -e "${BLUE}Who are you?${NC}"
-    echo "1) Sender   (I have a file to send)"
-    echo "2) Receiver (I want to download a file)"
-    echo -ne "${YELLOW}Select [1-2]: ${NC}"
+    echo -e "${BLUE}What would you like to do?${NC}"
+    echo "1) Send File"
+    echo "2) Receive File"
+    echo "3) Start Chat (Host)"
+    echo "4) Join Chat"
+    echo -ne "${YELLOW}Select [1-4]: ${NC}"
     read MODE
     MODE=$(sanitize "$MODE")
-    if [[ "$MODE" == "1" || "$MODE" == "2" ]]; then break; fi
+    if [[ "$MODE" =~ ^[1-4]$ ]]; then break; fi
     echo -e "${RED}Invalid selection.${NC}"
 done
 
-if [[ "$MODE" == "1" ]]; then
-    ROLE="sender"
+if [[ "$MODE" == "1" || "$MODE" == "3" ]]; then
+    ROLE="host"
     WG_IP="10.0.0.1/32"
     PEER_WG_IP="10.0.0.2/32"
+    if [[ "$MODE" == "1" ]]; then SUB_MODE="file"; else SUB_MODE="chat"; fi
 else
-    ROLE="receiver"
+    ROLE="joiner"
     WG_IP="10.0.0.2/32"
     PEER_WG_IP="10.0.0.1/32"
+    if [[ "$MODE" == "2" ]]; then SUB_MODE="file"; else SUB_MODE="chat"; fi
 fi
 
 echo -e "\n${GREEN}--- YOUR CONNECTION STRING (Share this with your peer) ---${NC}"
@@ -152,7 +156,7 @@ done
 
 # 5. File selection for sender
 FILE_TO_SEND=""
-if [[ "$ROLE" == "sender" ]]; then
+if [[ "$SUB_MODE" == "file" && "$ROLE" == "host" ]]; then
     echo -ne "${YELLOW}File path to send (drag file here): ${NC}"
     read FILE_INPUT
     FILE_TO_SEND=$(echo "$FILE_INPUT" | sed "s/'//g" | sed 's/\\//g' | xargs)
@@ -177,19 +181,33 @@ AllowedIPs = $PEER_WG_IP
 PersistentKeepalive = 10
 EOF
 
-if [[ "$ROLE" == "sender" ]]; then
-    echo -e "\n[TCPServerTunnel]\nListenPort = 9000\nTarget = 127.0.0.1:8080" >> wireworm.conf
-    echo -e "${GREEN}Starting Receiver-ready file server...${NC}"
-    go run test_utils/wireworm_sender.go "$FILE_TO_SEND" &
-    SERVER_PID=$!
+if [[ "$ROLE" == "host" ]]; then
+    if [[ "$SUB_MODE" == "file" ]]; then
+        echo -e "\n[TCPServerTunnel]\nListenPort = 9000\nTarget = 127.0.0.1:8080" >> wireworm.conf
+        echo -e "${GREEN}Starting Receiver-ready file server...${NC}"
+        go run test_utils/wireworm_sender.go "$FILE_TO_SEND" &
+        SERVER_PID=$!
+    else
+        echo -e "\n[TCPServerTunnel]\nListenPort = 9002\nTarget = 127.0.0.1:8082" >> wireworm.conf
+        echo -e "${GREEN}Preparing Chat Host...${NC}"
+        # We will start the actual chat tool AFTER wireproxy is up
+    fi
 else
-    echo -e "\n[TCPClientTunnel]\nBindAddress = 127.0.0.1:9001\nTarget = 10.0.0.1:9000" >> wireworm.conf
+    if [[ "$SUB_MODE" == "file" ]]; then
+        echo -e "\n[TCPClientTunnel]\nBindAddress = 127.0.0.1:9001\nTarget = 10.0.0.1:9000" >> wireworm.conf
+    else
+        echo -e "\n[TCPClientTunnel]\nBindAddress = 127.0.0.1:9003\nTarget = 10.0.0.1:9002" >> wireworm.conf
+    fi
 fi
 
 echo -e "${CYAN}PUNCHING HOLE...${NC}"
-echo -e "${YELLOW}Wait for 'handshake response' logs, then download the file.${NC}"
-if [[ "$ROLE" == "receiver" ]]; then
-    echo -e "${GREEN}Command to download: ${NC}curl http://127.0.0.1:9001/download -o downloaded_file"
+if [[ "$SUB_MODE" == "file" ]]; then
+    echo -e "${YELLOW}Wait for 'handshake response' logs, then download the file.${NC}"
+    if [[ "$ROLE" == "joiner" ]]; then
+        echo -e "${GREEN}Command to download: ${NC}curl http://127.0.0.1:9001/download -o downloaded_file"
+    fi
+else
+    echo -e "${YELLOW}Wait for handshake, then chat will begin.${NC}"
 fi
 
 # Start wireproxy with the info server enabled for handshake monitoring
@@ -207,13 +225,30 @@ echo -e "${BLUE}Monitoring Connection Status...${NC}"
             echo -e "\n${GREEN}====================================================${NC}"
             echo -e "${GREEN}         🚀 SUCCESS: HOLE PUNCHED!                 ${NC}"
             echo -e "${GREEN}====================================================${NC}"
-            echo -e "${CYAN}Handshake established at: $(date -r $HANDSHAKE)${NC}"
-            echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
-            if [[ "$ROLE" == "receiver" ]]; then
-                echo -e "${GREEN}You can now run the curl command in another terminal.${NC}"
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                HS_TIME=$(date -r $HANDSHAKE)
+            else
+                HS_TIME=$(date -d @$HANDSHAKE)
             fi
-            # Keep monitoring but slow down
-            sleep 60
+            echo -e "${CYAN}Handshake established at: $HS_TIME${NC}"
+            echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
+            if [[ "$SUB_MODE" == "file" ]]; then
+                if [[ "$ROLE" == "joiner" ]]; then
+                    echo -e "${GREEN}You can now run the curl command in another terminal.${NC}"
+                fi
+                # Keep monitoring but slow down
+                sleep 60
+            else
+                echo -e "${GREEN}Starting Chat Session...${NC}"
+                if [[ "$ROLE" == "host" ]]; then
+                    go run test_utils/wireworm_chat.go server 8082
+                else
+                    go run test_utils/wireworm_chat.go client 127.0.0.1:9003
+                fi
+                # Once chat exits, kill everything
+                kill $WIREPROXY_PID 2>/dev/null || true
+                exit 0
+            fi
         else
             echo -ne "${YELLOW}Listening for peer... (No handshake yet) \r${NC}"
         fi

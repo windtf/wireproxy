@@ -13,38 +13,25 @@ Standard file transfer tools often rely on a central relay (like Magic Wormhole'
     *   The **Sender** exposes a local HTTP file server via a `[TCPServerTunnel]` on the WireGuard interface.
     *   The **Receiver** maps the sender's WireGuard IP/Port to a local port using a `[TCPClientTunnel]`.
 
-## Components
+## Features
 
-- `wireworm.sh`: A wrapper script that generates WireGuard keys, creates the `wireproxy` configuration, and sets up the tunnels.
-- `wireworm_sender.go`: A simple Go-based HTTP server that serves a file for transfer.
-
-## Usage (Simulated over Internet)
-
-### 1. Signaling (Exchange Info)
-You need to exchange:
-- Public IP
-- Public Port (UDP)
-- WireGuard Public Key
-
-### 2. Run the Sender
-```bash
-./wireworm.sh sender <RECEIVER_PUBLIC_IP> <RECEIVER_PORT> <RECEIVER_PUBKEY>
-```
-
-### 3. Run the Receiver
-```bash
-./wireworm.sh receiver <SENDER_PUBLIC_IP> <SENDER_PORT> <SENDER_PUBKEY>
-```
-
-### 4. Transfer the File
-On the receiver machine:
-```bash
-curl http://127.0.0.1:9001/download -o received_file.txt
-```
-
-## Why WireWorm?
-
+- **P2P File Transfer**: High-speed, secure file transfers using standard HTTP over WireGuard.
+- **Instant Chat**: Secure, private, end-to-end encrypted chat session between peers.
 - **No Root Required**: Everything runs in userspace.
-- **VPN Security**: Inherits the Noise Protocol encryption and security of WireGuard.
-- **Resilient**: TCP-over-WireGuard handles packet loss and congestion better than raw UDP transfers.
-- **Versatile**: Once the tunnel is up, you aren't limited to file transfers. You have a full private network between the two peers.
+- **NAT Traversal**: Automatic UDP hole punching to bypass restrictive firewalls.
+
+## Usage (Interactive)
+
+The easiest way to use WireWorm is via the interactive script:
+
+```bash
+cd wireproxy
+bash wireworm_interactive.sh
+```
+
+1.  **Select Mode**: Choose between File Transfer or Chat.
+2.  **Exchange Connection String**: The script will provide a single string (e.g., `IP:PORT:PUBKEY`) to share with your peer.
+3.  **Establish Secure Tunnel**: Once both peers enter each other's strings, the NAT hole is punched and the WireGuard handshake begins.
+4.  **Interact**:
+    *   **In Chat Mode**: The chat session will begin automatically in your terminal.
+    *   **In File Mode**: Use the provided `curl` command to download the file.
