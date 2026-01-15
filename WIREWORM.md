@@ -47,7 +47,11 @@ docker run -it --rm \
   -p 51820:51820/udp \
   wireworm
 ```
-*Note: This maps the hole-punching port explicitly so it can reach the container.*
+
+**Why this is necessary:**
+- **The Chain**: `Internet (Public Port)` $\to$ `Router` $\to$ `Mac/Win (Host Port)` $\to$ `Docker VM` $\to$ `Container (Local Port)`.
+- Without `-p`, your Mac doesn't know to forward incoming P2P packets from the internet into the Docker VM.
+- **WIRE_PORT** ensures the script inside Docker actually uses the port you've opened on your host.
 
 1.  **Select Mode**: Choose between File Transfer or Chat.
 2.  **Exchange Connection String**: The script will provide a single string (e.g., `IP:PORT:PUBKEY`) to share with your peer.

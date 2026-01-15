@@ -51,26 +51,22 @@ echo -ne "${BLUE}Discovering NAT mapping... ${NC}"
 # Try multiple servers if one is down
 STUN_SERVERS=("stun.l.google.com:19302" "stunserver.org:3478" "stun.voip.blackberry.com:3478")
 STUN_OUT=""
-STUN_ERRORS=""
 
 for s in "${STUN_SERVERS[@]}"; do
     server=$(echo $s | cut -d':' -f1)
     port=$(echo $s | cut -d':' -f2)
     echo -ne "${YELLOW}.${NC}"
     
-    # Use timeout only if available (GNU coreutils, usually missing on macOS)
+    # Use native timeout if available, otherwise just run
+    # '--mode basic' is much faster and avoids Docker network driver bottlenecks
     if command -v timeout &> /dev/null; then
-        TMP_OUT=$(timeout 5 stunclient --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "Error: Timeout")
+        STUN_OUT=$(timeout 2 stunclient --mode basic --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "")
     else
-        # Fallback for macOS: no timeout (relying on stunclient internal timeout)
-        TMP_OUT=$(stunclient --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "Error: stunclient failed")
+        STUN_OUT=$(stunclient --mode basic --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "")
     fi
-    
-    if [[ "$TMP_OUT" == *"Mapped address"* ]]; then
-        STUN_OUT="$TMP_OUT"
+
+    if [[ "$STUN_OUT" == *"Mapped address"* ]]; then
         break
-    else
-        STUN_ERRORS+="\n - $s: $(echo "$TMP_OUT" | head -n 1)"
     fi
 done
 echo -e " ${GREEN}Done!${NC}"
@@ -79,9 +75,7 @@ PUB_IP=$(echo "$STUN_OUT" | grep -oE "Mapped address: [0-9]+\.[0-9]+\.[0-9]+\.[0
 PUB_PORT=$(echo "$STUN_OUT" | grep -oE "Mapped address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" | cut -d' ' -f3 | cut -d':' -f2 || echo "")
 
 if [[ -z "$PUB_IP" || -z "$PUB_PORT" ]]; then
-    echo -e "${YELLOW}Warning: STUN discovery failed.${NC}"
-    echo -e "${RED}Detailed Errors:${NC}${STUN_ERRORS}"
-    echo -e "${YELLOW}Falling back to simple IP discovery.${NC}"
+    echo -e "${YELLOW}Warning: STUN discovery failed. Falling back to simple IP discovery.${NC}"
     PUB_IP=$(curl -s https://api.ipify.org || echo "unknown")
     PUB_PORT=$LOCAL_WG_PORT
 fi
