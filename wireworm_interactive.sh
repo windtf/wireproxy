@@ -279,6 +279,14 @@ else
         sleep 2
     done
     
+    # Check if we exited because wireproxy died
+    if ! kill -0 $WIREPROXY_PID 2>/dev/null; then
+        echo -e "\n${RED}Error: wireproxy process died unexpectedly!${NC}"
+        echo -e "${YELLOW}--- Last logs from wireproxy.log ---${NC}"
+        tail -n 20 wireproxy.log
+        exit 1
+    fi
+
     # Cleanup and exit cleanly
     kill $WIREPROXY_PID 2>/dev/null || true
     exit 0
