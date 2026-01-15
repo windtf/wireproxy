@@ -92,7 +92,7 @@ EOF
 if [[ "$ROLE" == "sender" ]]; then
     echo -e "\n[TCPServerTunnel]\nListenPort = 9000\nTarget = 127.0.0.1:8080" >> wireworm.conf
     echo -e "${GREEN}Starting Receiver-ready file server...${NC}"
-    go run wireworm_sender.go "$FILE_TO_SEND" &
+    go run test_utils/wireworm_sender.go "$FILE_TO_SEND" &
     SERVER_PID=$!
     trap 'kill $SERVER_PID 2>/dev/null' EXIT
 else

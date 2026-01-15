@@ -41,9 +41,12 @@ ListenPort = 9000
 Target = 127.0.0.1:8080
 EOF
     echo "Starting Sender File Server..."
-    # Create a dummy file to send
-    echo "Hello from WireWorm! This file was transferred via userspace WireGuard hole punching." > wormhole_package.txt
-    go run wireworm_sender.go wormhole_package.txt &
+    FILE_TO_SEND=${5:-"wormhole_package.txt"}
+    if [ ! -f "$FILE_TO_SEND" ]; then
+        echo "Creating dummy bundle: $FILE_TO_SEND"
+        echo "Hello from WireWorm! This file was transferred via userspace WireGuard hole punching." > "$FILE_TO_SEND"
+    fi
+    go run test_utils/wireworm_sender.go "$FILE_TO_SEND" &
     
 else
     MY_WG_IP="10.0.0.2/32"
