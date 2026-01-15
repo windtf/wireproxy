@@ -135,7 +135,12 @@ echo -e "${GREEN}---------------------------------------------------${NC}\n"
     done
 ) &
 MAINTAINER_PID=$!
-trap 'kill $MAINTAINER_PID 2>/dev/null || true' EXIT
+cleanup() {
+    # Disable the trap to prevent recursion
+    trap - INT TERM EXIT
+    kill $WIREPROXY_PID $SERVER_PID $MAINTAINER_PID $MONITOR_PID 2>/dev/null || true
+}
+trap cleanup INT TERM EXIT
 
 # 4. Input Peer Data
 echo -e "${BLUE}Enter Peer Information:${NC}"
@@ -215,7 +220,7 @@ fi
 WIREPROXY_PID=$!
 
 # Handle shutdown
-trap 'kill $WIREPROXY_PID $SERVER_PID $MAINTAINER_PID $MONITOR_PID 2>/dev/null || true; exit' INT TERM EXIT
+# (Cleanup is now handled by the 'cleanup' function above)
 
 # Handshake Monitor Loop
 if [[ "$SUB_MODE" == "file" ]]; then
@@ -279,15 +284,20 @@ else
         sleep 2
     done
     
-    # Check if we exited because wireproxy died
+    # If we are here, something went wrong or the loop finished without break
     if ! kill -0 $WIREPROXY_PID 2>/dev/null; then
         echo -e "\n${RED}Error: wireproxy process died unexpectedly!${NC}"
         echo -e "${YELLOW}--- Last logs from wireproxy.log ---${NC}"
-        tail -n 20 wireproxy.log
+        if [ -f wireproxy.log ]; then
+            tail -n 30 wireproxy.log
+        else
+            echo "Log file not found."
+        fi
+        cleanup
         exit 1
     fi
 
     # Cleanup and exit cleanly
-    kill $WIREPROXY_PID 2>/dev/null || true
+    cleanup
     exit 0
 fi
