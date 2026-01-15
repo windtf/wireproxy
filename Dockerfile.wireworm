@@ -1,38 +1,45 @@
 # Multi-stage build for a clean, efficient image
-FROM docker.io/golang:1.21-bookworm AS build
-
-# Set the working directory
+FROM docker.io/golang:1.21-bookworm AS build-wireproxy
 WORKDIR /usr/src/wireproxy
-
-# Copy everything for building
 COPY . .
-
-# Build the wireproxy binary
 RUN make
 
-# Start a fresh stage for the final image
+# Build Stuntman from source in a dedicated stage
+FROM docker.io/debian:bookworm AS build-stuntman
+RUN apt-get update && apt-get install -y \
+    g++ \
+    make \
+    libboost-dev \
+    libssl-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/stuntman
+RUN curl -L https://github.com/jselbie/stuntman/archive/refs/tags/v2.1.0.tar.gz | tar -xz --strip-components=1
+RUN make
+
+# Final image
 FROM docker.io/golang:1.21-bookworm
 
-# Install runtime dependencies for WireWorm
-# - wireguard-tools: for 'wg' keys
-# - stuntman-client: for STUN/NAT discovery
-# - bash/curl/make: for scripts and building
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     wireguard-tools \
-    stuntman-client \
     bash \
     curl \
     make \
     iproute2 \
     procps \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up the application directory
 WORKDIR /app
 
-# Copy the built wireproxy from the build stage
-COPY --from=build /usr/src/wireproxy/wireproxy /app/wireproxy
-# Copy the rest of the source (needed for 'go run' chat/sender tools)
+# Copy binaries from build stages
+COPY --from=build-wireproxy /usr/src/wireproxy/wireproxy /usr/bin/wireproxy
+COPY --from=build-stuntman /usr/src/stuntman/stunclient /usr/bin/stunclient
+COPY --from=build-stuntman /usr/src/stuntman/stunserver /usr/bin/stunserver
+
+# Copy source for 'go run' utilities
 COPY . /app/
 
 # Ensure scripts are executable
@@ -40,8 +47,7 @@ RUN chmod +x /app/wireworm_interactive.sh /app/wireworm.sh
 
 # Metadata
 LABEL org.opencontainers.image.title="WireWorm"
-LABEL org.opencontainers.image.description="NAT Hole Punching PoC with userspace WireGuard"
+LABEL org.opencontainers.image.description="NAT Hole Punching PoC with userspace WireGuard and built-in STUN client"
 
-# WireWorm requires host networking for effective NAT hole punching
-# Use: docker run -it --rm --network host wireworm
+# Entrypoint setup
 ENTRYPOINT ["/bin/bash", "./wireworm_interactive.sh"]
