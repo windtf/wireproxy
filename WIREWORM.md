@@ -29,6 +29,19 @@ cd wireproxy
 bash wireworm_interactive.sh
 ```
 
+### Usage (Docker)
+
+You can also run WireWorm in a container. Note that `--network host` is required for successful UDP hole punching to occur through the host's NAT.
+
+1.  **Build the image**:
+    ```bash
+    docker build -t wireworm -f Dockerfile.wireworm .
+    ```
+2.  **Run the container**:
+    ```bash
+    docker run -it --rm --network host wireworm
+    ```
+
 1.  **Select Mode**: Choose between File Transfer or Chat.
 2.  **Exchange Connection String**: The script will provide a single string (e.g., `IP:PORT:PUBKEY`) to share with your peer.
 3.  **Establish Secure Tunnel**: Once both peers enter each other's strings, the NAT hole is punched and the WireGuard handshake begins.
