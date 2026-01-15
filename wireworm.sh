@@ -18,6 +18,18 @@ MY_WG_IP=""
 PEER_WG_IP=""
 LOCAL_PORT=51820
 
+# discovery
+echo "Discovering NAT mapping via STUN..."
+STUN_OUT=$(stunclient --localport $LOCAL_PORT stun.l.google.com 19302 2>&1 || echo "")
+PUB_IP=$(echo "$STUN_OUT" | grep "Mapped address" | cut -d' ' -f3 | cut -d':' -f1)
+PUB_PORT=$(echo "$STUN_OUT" | grep "Mapped address" | cut -d' ' -f3 | cut -d':' -f2)
+
+if [[ -n "$PUB_IP" ]]; then
+    echo "Your External IP: $PUB_IP"
+    echo "Your External Port: $PUB_PORT"
+    echo "SHARE THIS WITH PEER!"
+fi
+
 if [[ "$ROLE" == "sender" ]]; then
     MY_WG_IP="10.0.0.1/32"
     PEER_WG_IP="10.0.0.2/32"

@@ -21,6 +21,15 @@ if ! command -v wg &> /dev/null; then
     exit 1
 fi
 
+if ! command -v stunclient &> /dev/null; then
+    echo -e "${YELLOW}Installing STUN client for NAT discovery...${NC}"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        brew install stuntman > /dev/null
+    else
+        sudo apt-get update && sudo apt-get install -y stun-client > /dev/null
+    fi
+fi
+
 if [ ! -f "./wireproxy" ]; then
     echo -e "${YELLOW}Building wireproxy...${NC}"
     make > /dev/null
@@ -29,7 +38,19 @@ fi
 # 2. Key Generation
 PRIV=$(wg genkey)
 PUB=$(echo "$PRIV" | wg pubkey)
-PUB_IP=$(curl -s https://api.ipify.org || echo "unknown")
+
+# --- NAT Discovery ---
+LOCAL_WG_PORT=51820
+echo -e "${BLUE}Discovering NAT mapping...${NC}"
+STUN_OUT=$(stunclient --localport $LOCAL_WG_PORT stun.l.google.com 19302 2>&1 || echo "")
+PUB_IP=$(echo "$STUN_OUT" | grep "Mapped address" | cut -d' ' -f3 | cut -d':' -f1)
+PUB_PORT=$(echo "$STUN_OUT" | grep "Mapped address" | cut -d' ' -f3 | cut -d':' -f2)
+
+if [[ -z "$PUB_IP" || -z "$PUB_PORT" ]]; then
+    echo -e "${YELLOW}Warning: STUN discovery failed. Falling back to simple IP discovery.${NC}"
+    PUB_IP=$(curl -s https://api.ipify.org || echo "unknown")
+    PUB_PORT=$LOCAL_WG_PORT
+fi
 
 # --- Validation Functions ---
 validate_ip() {
@@ -76,19 +97,29 @@ if [[ "$MODE" == "1" ]]; then
     ROLE="sender"
     WG_IP="10.0.0.1/32"
     PEER_WG_IP="10.0.0.2/32"
-    LOCAL_WG_PORT=51820
 else
     ROLE="receiver"
     WG_IP="10.0.0.2/32"
     PEER_WG_IP="10.0.0.1/32"
-    LOCAL_WG_PORT=51820
 fi
 
 echo -e "\n${GREEN}--- YOUR SIGNAL DATA (Share this with your peer) ---${NC}"
 echo -e "${YELLOW}Public IP:  ${NC}$PUB_IP"
-echo -e "${YELLOW}UDP Port:   ${NC}$LOCAL_WG_PORT"
+echo -e "${YELLOW}UDP Port:   ${NC}$PUB_PORT"
 echo -e "${YELLOW}Public Key: ${NC}$PUB"
 echo -e "${GREEN}---------------------------------------------------${NC}\n"
+
+# Start a background "Hole Maintainer" to keep the NAT mapping from expiring
+# while the user is typing the peer information.
+(
+    while true; do
+        # Sending a tiny packet to the stun server to keep the mapping active
+        stunclient --localport $LOCAL_WG_PORT stun.l.google.com 19302 &> /dev/null
+        sleep 20
+    done
+) &
+MAINTAINER_PID=$!
+trap 'kill $MAINTAINER_PID 2>/dev/null || true' EXIT
 
 # 4. Input Peer Data
 echo -e "${BLUE}Enter Peer Information:${NC}"
@@ -148,7 +179,6 @@ if [[ "$ROLE" == "sender" ]]; then
     echo -e "${GREEN}Starting Receiver-ready file server...${NC}"
     go run test_utils/wireworm_sender.go "$FILE_TO_SEND" &
     SERVER_PID=$!
-    trap 'kill $SERVER_PID 2>/dev/null' EXIT
 else
     echo -e "\n[TCPClientTunnel]\nBindAddress = 127.0.0.1:9001\nTarget = 10.0.0.1:9000" >> wireworm.conf
 fi
@@ -158,6 +188,38 @@ echo -e "${YELLOW}Wait for 'handshake response' logs, then download the file.${N
 if [[ "$ROLE" == "receiver" ]]; then
     echo -e "${GREEN}Command to download: ${NC}curl http://127.0.0.1:9001/download -o downloaded_file"
 fi
-echo ""
 
-./wireproxy -c wireworm.conf
+# Start wireproxy with the info server enabled for handshake monitoring
+./wireproxy -c wireworm.conf -i 127.0.0.1:8081 > wireproxy.log 2>&1 &
+WIREPROXY_PID=$!
+
+# Handshake Monitor Loop
+echo -e "${BLUE}Monitoring Connection Status...${NC}"
+(
+    while kill -0 $WIREPROXY_PID 2>/dev/null; do
+        METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
+        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 || echo "0")
+        
+        if [ "$HANDSHAKE" -ne "0" ] && [ ! -z "$HANDSHAKE" ]; then
+            echo -e "\n${GREEN}====================================================${NC}"
+            echo -e "${GREEN}         🚀 SUCCESS: HOLE PUNCHED!                 ${NC}"
+            echo -e "${GREEN}====================================================${NC}"
+            echo -e "${CYAN}Handshake established at: $(date -r $HANDSHAKE)${NC}"
+            echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
+            if [[ "$ROLE" == "receiver" ]]; then
+                echo -e "${GREEN}You can now run the curl command in another terminal.${NC}"
+            fi
+            # Keep monitoring but slow down
+            sleep 60
+        else
+            echo -ne "${YELLOW}Listening for peer... (No handshake yet) \r${NC}"
+        fi
+        sleep 2
+    done
+) &
+MONITOR_PID=$!
+
+# Handle shutdown
+trap 'kill $WIREPROXY_PID $SERVER_PID $MAINTAINER_PID $MONITOR_PID 2>/dev/null || true; exit' INT TERM EXIT
+
+wait $WIREPROXY_PID
