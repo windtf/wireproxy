@@ -47,7 +47,7 @@ else
     LOCAL_WG_PORT=$WIRE_PORT
 fi
 
-echo -ne "${BLUE}Discovering NAT mapping... ${NC}"
+echo -ne "${BLUE}Discovering NAT mapping... ${NC}\n"
 # Try multiple servers if one is down
 STUN_SERVERS=("stun.l.google.com:19302" "stunserver.org:3478" "stun.voip.blackberry.com:3478")
 STUN_OUT=""
@@ -55,18 +55,68 @@ STUN_OUT=""
 for s in "${STUN_SERVERS[@]}"; do
     server=$(echo $s | cut -d':' -f1)
     port=$(echo $s | cut -d':' -f2)
-    echo -ne "${YELLOW}.${NC}"
+    echo -e "${YELLOW}Trying $server:$port...${NC}"
+
+    # Helper for current time in ms
+    current_time_ms() {
+        if command -v python3 &>/dev/null; then
+            python3 -c 'import time; print(int(time.time() * 1000))'
+        else
+            echo $(($(date +%s) * 1000))
+        fi
+    }
+
+    # 1. DNS Resolution Timing (Force IPv4)
+    echo -ne "  DNS Resolve: "
+    START_DNS=$(current_time_ms)
     
-    # Use native timeout if available, otherwise just run
-    # '--mode basic' is much faster and avoids Docker network driver bottlenecks
-    if command -v timeout &> /dev/null; then
-        STUN_OUT=$(timeout 2 stunclient --mode basic --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "")
+    # Portable DNS resolution (Python is best common denominator usually)
+    if command -v python3 &>/dev/null; then
+        RESOLVED_IP=$(python3 -c "import socket; print(socket.gethostbyname('$server'))" 2>/dev/null || echo "")
     else
-        STUN_OUT=$(stunclient --mode basic --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "")
+        # Fallback for systems without python3 (rare but possible in minimal containers)
+        if command -v getent &>/dev/null; then
+            RESOLVED_IP=$(getent hosts "$server" | awk '{ print $1 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+        else
+            # Very basic fallback for macOS if no python
+            RESOLVED_IP=$(ping -c 1 $server 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+        fi
     fi
 
-    if [[ "$STUN_OUT" == *"Mapped address"* ]]; then
+    END_DNS=$(current_time_ms)
+    DNS_DUR=$(( END_DNS - START_DNS ))
+
+    if [[ -z "$RESOLVED_IP" ]]; then
+        echo -e "${RED}FAILED${NC} (No IPv4 found, ${DNS_DUR}ms)"
+        continue
+    else
+        echo -e "${GREEN}OK${NC} ($RESOLVED_IP, ${DNS_DUR}ms)"
+    fi
+
+    # 2. STUN Request Timing
+    echo -ne "  STUN Request: "
+    START_STUN=$(current_time_ms)
+    
+    # Increase timeout to 5s
+    # Pass the RESOLVED_IP to stunclient to avoid re-resolution or IPv6 usage
+    CMD_OUT=""
+    if command -v timeout &> /dev/null; then
+        CMD_OUT=$(timeout 5 stunclient --mode basic --localport $LOCAL_WG_PORT $RESOLVED_IP $port 2>&1 || echo "TIMEOUT")
+    elif command -v gtimeout &> /dev/null; then
+        # macOS coreutils support
+        CMD_OUT=$(gtimeout 5 stunclient --mode basic --localport $LOCAL_WG_PORT $RESOLVED_IP $port 2>&1 || echo "TIMEOUT")
+    else
+        CMD_OUT=$(stunclient --mode basic --localport $LOCAL_WG_PORT $RESOLVED_IP $port 2>&1 || echo "FAILED")
+    fi
+    END_STUN=$(current_time_ms)
+    STUN_DUR=$(( END_STUN - START_STUN ))
+    
+    if [[ "$CMD_OUT" == *"Mapped address"* ]]; then
+        echo -e "${GREEN}SUCCESS${NC} (${STUN_DUR}ms)"
+        STUN_OUT="$CMD_OUT"
         break
+    else
+        echo -e "${RED}FAILED${NC} (${STUN_DUR}ms) - Output: ${CMD_OUT}"
     fi
 done
 echo -e " ${GREEN}Done!${NC}"
