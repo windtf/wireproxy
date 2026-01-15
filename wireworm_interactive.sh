@@ -217,27 +217,36 @@ WIREPROXY_PID=$!
 # Handshake Monitor Loop
 echo -e "${BLUE}Monitoring Connection Status...${NC}"
 (
+    CONNECTED=false
     while kill -0 $WIREPROXY_PID 2>/dev/null; do
         METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
-        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 || echo "0")
+        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs || echo "0")
         
-        if [ "$HANDSHAKE" -ne "0" ] && [ ! -z "$HANDSHAKE" ]; then
-            echo -e "\n${GREEN}====================================================${NC}"
-            echo -e "${GREEN}         🚀 SUCCESS: HOLE PUNCHED!                 ${NC}"
-            echo -e "${GREEN}====================================================${NC}"
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                HS_TIME=$(date -r $HANDSHAKE)
-            else
-                HS_TIME=$(date -d @$HANDSHAKE)
+        # Ensure HANDSHAKE is a valid number
+        if [[ ! "$HANDSHAKE" =~ ^[0-9]+$ ]]; then HANDSHAKE=0; fi
+
+        if [ "$HANDSHAKE" -gt 0 ]; then
+            if [ "$CONNECTED" = false ]; then
+                echo -e "\n${GREEN}====================================================${NC}"
+                echo -e "${GREEN}         🚀 SUCCESS: HOLE PUNCHED!                 ${NC}"
+                echo -e "${GREEN}====================================================${NC}"
+                
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    HS_TIME=$(date -r "$HANDSHAKE" 2>/dev/null || echo "Unknown")
+                else
+                    HS_TIME=$(date -d @"$HANDSHAKE" 2>/dev/null || echo "Unknown")
+                fi
+                echo -e "${CYAN}Handshake established at: $HS_TIME${NC}"
+                echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
+                CONNECTED=true
             fi
-            echo -e "${CYAN}Handshake established at: $HS_TIME${NC}"
-            echo -e "${YELLOW}WireWorm tunnel is active.${NC}"
+
             if [[ "$SUB_MODE" == "file" ]]; then
                 if [[ "$ROLE" == "joiner" ]]; then
                     echo -e "${GREEN}You can now run the curl command in another terminal.${NC}"
                 fi
-                # Keep monitoring but slow down
-                sleep 60
+                # Handshake succeeded, we can slow down metrics polling significantly
+                sleep 30
             else
                 echo -e "${GREEN}Starting Chat Session...${NC}"
                 if [[ "$ROLE" == "host" ]]; then
