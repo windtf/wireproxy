@@ -40,8 +40,12 @@ PRIV=$(wg genkey)
 PUB=$(echo "$PRIV" | wg pubkey)
 
 # --- NAT Discovery ---
-# Use a random local port for better punch-through and to avoid conflicts
-LOCAL_WG_PORT=$((RANDOM % 55535 + 10000))
+# Use a random local port by default, or an environment variable if provided
+if [[ -z "$WIRE_PORT" ]]; then
+    LOCAL_WG_PORT=$((RANDOM % 55535 + 10000))
+else
+    LOCAL_WG_PORT=$WIRE_PORT
+fi
 
 echo -e "${BLUE}Discovering NAT mapping using local port $LOCAL_WG_PORT...${NC}"
 # Try multiple servers if one is down

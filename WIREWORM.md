@@ -31,16 +31,23 @@ bash wireworm_interactive.sh
 
 ### Usage (Docker)
 
-You can also run WireWorm in a container. Note that `--network host` is required for successful UDP hole punching to occur through the host's NAT.
+You can also run WireWorm in a container. 
 
-1.  **Build the image**:
-    ```bash
-    docker build -t wireworm -f Dockerfile.wireworm .
-    ```
-2.  **Run the container**:
-    ```bash
-    docker run -it --rm --network host wireworm
-    ```
+#### On Linux (Native Docker):
+```bash
+docker run -it --rm --network host wireworm
+```
+
+#### On macOS / Windows (Docker Desktop):
+On Mac and Windows, Docker runs inside a virtual machine, so `--network host` doesn't provide direct access to your Mac's network. You must use explicit port mapping:
+
+```bash
+docker run -it --rm \
+  -e WIRE_PORT=51820 \
+  -p 51820:51820/udp \
+  wireworm
+```
+*Note: This maps the hole-punching port explicitly so it can reach the container.*
 
 1.  **Select Mode**: Choose between File Transfer or Chat.
 2.  **Exchange Connection String**: The script will provide a single string (e.g., `IP:PORT:PUBKEY`) to share with your peer.
