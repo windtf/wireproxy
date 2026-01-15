@@ -224,7 +224,8 @@ if [[ "$SUB_MODE" == "file" ]]; then
         CONNECTED=false
         while kill -0 $WIREPROXY_PID 2>/dev/null; do
             METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
-            HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs || echo "0")
+            HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs)
+            HANDSHAKE=${HANDSHAKE:-0}
             if [[ ! "$HANDSHAKE" =~ ^[0-9]+$ ]]; then HANDSHAKE=0; fi
 
             if [ "$HANDSHAKE" -gt 0 ]; then
@@ -258,7 +259,8 @@ else
     echo -e "${BLUE}Waiting for peer to connect...${NC}"
     while kill -0 $WIREPROXY_PID 2>/dev/null; do
         METRICS=$(curl -s http://127.0.0.1:8081/metrics || echo "")
-        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs || echo "0")
+        HANDSHAKE=$(echo "$METRICS" | grep "last_handshake_time_sec" | cut -d'=' -f2 | xargs)
+        HANDSHAKE=${HANDSHAKE:-0}
         if [[ ! "$HANDSHAKE" =~ ^[0-9]+$ ]]; then HANDSHAKE=0; fi
 
         if [ "$HANDSHAKE" -gt 0 ]; then

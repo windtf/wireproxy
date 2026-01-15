@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y \
     libboost-dev \
     libssl-dev \
     curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/stuntman
-RUN curl -L https://github.com/jselbie/stuntman/archive/refs/tags/v2.1.0.tar.gz | tar -xz --strip-components=1
+RUN curl -L https://github.com/jselbie/stunserver/archive/refs/heads/main.tar.gz | tar -xz --strip-components=1
 RUN make
 
 # Final image
