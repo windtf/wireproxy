@@ -103,10 +103,8 @@ else
     PEER_WG_IP="10.0.0.1/32"
 fi
 
-echo -e "\n${GREEN}--- YOUR SIGNAL DATA (Share this with your peer) ---${NC}"
-echo -e "${YELLOW}Public IP:  ${NC}$PUB_IP"
-echo -e "${YELLOW}UDP Port:   ${NC}$PUB_PORT"
-echo -e "${YELLOW}Public Key: ${NC}$PUB"
+echo -e "\n${GREEN}--- YOUR CONNECTION STRING (Share this with your peer) ---${NC}"
+echo -e "${YELLOW}CONNECTION:${NC} ${CYAN}$PUB_IP:$PUB_PORT:$PUB${NC}"
 echo -e "${GREEN}---------------------------------------------------${NC}\n"
 
 # Start a background "Hole Maintainer" to keep the NAT mapping from expiring
@@ -124,27 +122,18 @@ trap 'kill $MAINTAINER_PID 2>/dev/null || true' EXIT
 # 4. Input Peer Data
 echo -e "${BLUE}Enter Peer Information:${NC}"
 while true; do
-    echo -ne "${YELLOW}Peer Public IP: ${NC}"
-    read PEER_IP
-    PEER_IP=$(sanitize "$PEER_IP")
-    if validate_ip "$PEER_IP"; then break; fi
-    echo -e "${RED}Invalid IP or Hostname.${NC}"
-done
+    echo -ne "${YELLOW}Paste Peer Connection String: ${NC}"
+    read PEER_INPUT
+    PEER_INPUT=$(sanitize "$PEER_INPUT")
+    
+    PEER_IP=$(echo "$PEER_INPUT" | cut -d':' -f1)
+    PEER_PORT=$(echo "$PEER_INPUT" | cut -d':' -f2)
+    PEER_PUB=$(echo "$PEER_INPUT" | cut -d':' -f3)
 
-while true; do
-    echo -ne "${YELLOW}Peer UDP Port:  ${NC}"
-    read PEER_PORT
-    PEER_PORT=$(sanitize "$PEER_PORT")
-    if validate_port "$PEER_PORT"; then break; fi
-    echo -e "${RED}Invalid Port (1-65535).${NC}"
-done
-
-while true; do
-    echo -ne "${YELLOW}Peer Public Key: ${NC}"
-    read PEER_PUB
-    PEER_PUB=$(sanitize "$PEER_PUB")
-    if validate_pubkey "$PEER_PUB"; then break; fi
-    echo -e "${RED}Invalid WireGuard Public Key.${NC}"
+    if validate_ip "$PEER_IP" && validate_port "$PEER_PORT" && validate_pubkey "$PEER_PUB"; then
+        break
+    fi
+    echo -e "${RED}Invalid connection string. Expected format: IP:PORT:PUBKEY${NC}"
 done
 
 # 5. File selection for sender
