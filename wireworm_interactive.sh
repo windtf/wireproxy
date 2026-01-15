@@ -35,7 +35,8 @@ PUB_IP=$(curl -s https://api.ipify.org || echo "unknown")
 echo -e "${BLUE}Who are you?${NC}"
 echo "1) Sender   (I have a file to send)"
 echo "2) Receiver (I want to download a file)"
-read -p "Select [1-2]: " MODE
+echo -ne "${YELLOW}Select [1-2]: ${NC}"
+read MODE
 
 if [[ "$MODE" == "1" ]]; then
     ROLE="sender"
@@ -59,14 +60,18 @@ echo -e "${GREEN}---------------------------------------------------${NC}\n"
 
 # 4. Input Peer Data
 echo -e "${BLUE}Enter Peer Information:${NC}"
-read -p "Peer Public IP: " PEER_IP
-read -p "Peer UDP Port: $NC" PEER_PORT
-read -p "Peer Public Key: $NC" PEER_PUB
+echo -ne "${YELLOW}Peer Public IP: ${NC}"
+read PEER_IP
+echo -ne "${YELLOW}Peer UDP Port:  ${NC}"
+read PEER_PORT
+echo -ne "${YELLOW}Peer Public Key: ${NC}"
+read PEER_PUB
 
 # 5. File selection for sender
 FILE_TO_SEND=""
 if [[ "$ROLE" == "sender" ]]; then
-    read -p "File path to send (drag file here): " FILE_INPUT
+    echo -ne "${YELLOW}File path to send (drag file here): ${NC}"
+    read FILE_INPUT
     FILE_TO_SEND=$(echo "$FILE_INPUT" | sed "s/'//g" | sed 's/\\//g') # Clean drag-and-drop paths
     if [ ! -f "$FILE_TO_SEND" ]; then
         echo -e "${YELLOW}File not found. Using default dummy file.${NC}"
