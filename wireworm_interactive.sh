@@ -40,11 +40,25 @@ PRIV=$(wg genkey)
 PUB=$(echo "$PRIV" | wg pubkey)
 
 # --- NAT Discovery ---
-LOCAL_WG_PORT=51820
-echo -e "${BLUE}Discovering NAT mapping...${NC}"
-STUN_OUT=$(stunclient --localport $LOCAL_WG_PORT stun.l.google.com 19302 2>&1 || echo "")
-PUB_IP=$(echo "$STUN_OUT" | grep "Mapped address" | cut -d' ' -f3 | cut -d':' -f1)
-PUB_PORT=$(echo "$STUN_OUT" | grep "Mapped address" | cut -d' ' -f3 | cut -d':' -f2)
+# Use a random local port for better punch-through and to avoid conflicts
+LOCAL_WG_PORT=$((RANDOM % 55535 + 10000))
+
+echo -e "${BLUE}Discovering NAT mapping using local port $LOCAL_WG_PORT...${NC}"
+# Try multiple servers if one is down
+STUN_SERVERS=("stun.l.google.com:19302" "stunserver.org:3478" "stun.voip.blackberry.com:3478")
+STUN_OUT=""
+
+for s in "${STUN_SERVERS[@]}"; do
+    server=$(echo $s | cut -d':' -f1)
+    port=$(echo $s | cut -d':' -f2)
+    STUN_OUT=$(stunclient --localport $LOCAL_WG_PORT $server $port 2>&1 || echo "")
+    if [[ "$STUN_OUT" == *"Mapped address"* ]]; then
+        break
+    fi
+done
+
+PUB_IP=$(echo "$STUN_OUT" | grep -oE "Mapped address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" | cut -d' ' -f3 | cut -d':' -f1 || echo "")
+PUB_PORT=$(echo "$STUN_OUT" | grep -oE "Mapped address: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+" | cut -d' ' -f3 | cut -d':' -f2 || echo "")
 
 if [[ -z "$PUB_IP" || -z "$PUB_PORT" ]]; then
     echo -e "${YELLOW}Warning: STUN discovery failed. Falling back to simple IP discovery.${NC}"
