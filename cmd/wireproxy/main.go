@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
-	"github.com/landlock-lsm/go-landlock/landlock"
 	"log"
 	"net"
 	"net/http"
@@ -11,7 +11,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
+
+	"github.com/landlock-lsm/go-landlock/landlock"
 
 	"github.com/akamensky/argparse"
 	"github.com/pufferffish/wireproxy"
@@ -23,9 +27,9 @@ import (
 const daemonProcess = "daemon-process"
 
 // default paths for wireproxy config file
-var default_config_paths = []string {
-    "/etc/wireproxy/wireproxy.conf",
-    os.Getenv("HOME")+"/.config/wireproxy.conf",
+var default_config_paths = []string{
+	"/etc/wireproxy/wireproxy.conf",
+	os.Getenv("HOME") + "/.config/wireproxy.conf",
 }
 
 var version = "1.0.8-dev"
@@ -59,12 +63,12 @@ func executablePath() string {
 
 // check if default config file paths exist
 func configFilePath() (string, bool) {
-    for _, path := range default_config_paths {
-        if _, err := os.Stat(path); err == nil {
-            return path, true
-        }
-    }
-    return "", false
+	for _, path := range default_config_paths {
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func lock(stage string) {
@@ -152,6 +156,127 @@ func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
 	panicIfError(landlock.V4.BestEffort().RestrictNet(rules...))
 }
 
+// runHolePunch handles the NAT hole punching mode
+func runHolePunch(exposePort int, peerCode string, localPort int, silent bool) {
+	// Determine mode
+	mode := "host"
+	if peerCode != "" {
+		mode = "join"
+	}
+
+	if mode == "host" && exposePort == 0 {
+		fmt.Println("Error: --expose <port> is required in host mode")
+		fmt.Println("Example: wireproxy --holepunch --expose 25565")
+		return
+	}
+
+	if mode == "join" && localPort == 0 {
+		fmt.Println("Error: --local <port> is required in join mode")
+		fmt.Println("Example: wireproxy --holepunch --code 7-pizza-elephant --local 25565")
+		return
+	}
+
+	// Create hole punch session
+	config := &wireproxy.HolePunchConfig{
+		Mode:       mode,
+		LocalPort:  0, // Let OS pick
+		ExposePort: exposePort,
+		BindPort:   localPort,
+		Code:       peerCode,
+	}
+
+	fmt.Println("🔍 Discovering NAT mapping...")
+	session, err := wireproxy.NewHolePunchSession(config)
+	if err != nil {
+		log.Fatalf("Failed to create session: %v", err)
+	}
+
+	fmt.Printf("✓ NAT discovered: %s\n\n", session.NATInfo.String())
+
+	if mode == "host" {
+		fmt.Println("═══════════════════════════════════")
+		fmt.Printf("  Share this code with your peer:\n")
+		fmt.Printf("  \033[1;32m%s\033[0m\n", session.Code)
+		fmt.Println("═══════════════════════════════════")
+		fmt.Println("\nWaiting for peer to connect...")
+	} else {
+		fmt.Printf("Connecting with code: %s\n", session.Code)
+	}
+
+	// Start NAT keepalive
+	stopKeepalive := wireproxy.MaintainNATMapping(session.NATInfo.LocalPort, 20*time.Second)
+	defer stopKeepalive()
+
+	// Exchange connection info via rendezvous
+	fmt.Println("📡 Exchanging connection info...")
+	err = session.ExchangeViaRendezvous()
+	if err != nil {
+		// Fallback to manual mode
+		fmt.Printf("\n⚠️  Rendezvous server unavailable. Using manual exchange.\n\n")
+		fmt.Println("Your connection string:")
+		fmt.Printf("  \033[1;36m%s\033[0m\n\n", session.GetConnectionString())
+		fmt.Print("Paste peer's connection string: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		peerConnStr, _ := reader.ReadString('\n')
+		peerConnStr = strings.TrimSpace(peerConnStr)
+
+		peerInfo, err := wireproxy.ParseConnectionString(peerConnStr)
+		if err != nil {
+			log.Fatalf("Invalid connection string: %v", err)
+		}
+		session.PeerInfo = peerInfo
+	}
+
+	fmt.Println("✓ Peer info received!")
+	fmt.Println("🔗 Establishing WireGuard tunnel...")
+
+	// Build WireGuard config
+	wgConfig, err := session.BuildWireGuardConfig()
+	if err != nil {
+		log.Fatalf("Failed to build WireGuard config: %v", err)
+	}
+
+	// Start WireGuard
+	logLevel := device.LogLevelVerbose
+	if silent {
+		logLevel = device.LogLevelSilent
+	}
+
+	tun, err := wireproxy.StartWireguard(wgConfig, logLevel)
+	if err != nil {
+		log.Fatalf("Failed to start WireGuard: %v", err)
+	}
+
+	// Add tunnel routines based on mode
+	if mode == "host" {
+		// Host: expose local port to tunnel
+		tunnelConfig := &wireproxy.TCPServerTunnelConfig{
+			ListenPort: exposePort,
+			Target:     fmt.Sprintf("127.0.0.1:%d", exposePort),
+		}
+		go tunnelConfig.SpawnRoutine(tun)
+
+		fmt.Printf("\n🚀 \033[1;32mTunnel active!\033[0m\n")
+		fmt.Printf("   Exposing localhost:%d to peer at 10.0.0.1:%d\n\n", exposePort, exposePort)
+	} else {
+		// Join: bind local port to tunnel
+		bindAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
+		tcpAddr, _ := net.ResolveTCPAddr("tcp", bindAddr)
+		tunnelConfig := &wireproxy.TCPClientTunnelConfig{
+			BindAddress: tcpAddr,
+			Target:      fmt.Sprintf("10.0.0.1:%d", localPort),
+		}
+		go tunnelConfig.SpawnRoutine(tun)
+
+		fmt.Printf("\n🚀 \033[1;32mTunnel active!\033[0m\n")
+		fmt.Printf("   Connect to localhost:%d to reach peer's service\n\n", localPort)
+	}
+
+	// Keep running
+	tun.StartPingIPs()
+}
+
 func main() {
 	s := make(chan os.Signal, 1)
 	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT)
@@ -181,6 +306,12 @@ func main() {
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
 	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
 
+	// Hole punch flags
+	holePunch := parser.Flag("", "holepunch", &argparse.Options{Help: "Enable NAT hole punching mode"})
+	exposePort := parser.Int("", "expose", &argparse.Options{Help: "Host mode: local port to expose to peer"})
+	peerCode := parser.String("", "code", &argparse.Options{Help: "Join mode: peer's wormhole code"})
+	localPort := parser.Int("", "local", &argparse.Options{Help: "Join mode: local port to bind for accessing remote service"})
+
 	err := parser.Parse(args)
 	if err != nil {
 		fmt.Print(parser.Usage(err))
@@ -192,13 +323,20 @@ func main() {
 		return
 	}
 
+	// Handle hole punch mode
+	if *holePunch {
+		runHolePunch(*exposePort, *peerCode, *localPort, *silent)
+		<-ctx.Done()
+		return
+	}
+
 	if *config == "" {
-        if path, config_exist := configFilePath(); config_exist {
-            *config = path
-        } else {
-            fmt.Println("configuration path is required")
-            return
-        }
+		if path, config_exist := configFilePath(); config_exist {
+			*config = path
+		} else {
+			fmt.Println("configuration path is required")
+			return
+		}
 	}
 
 	if !*daemon {
