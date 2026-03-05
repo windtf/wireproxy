@@ -1,11 +1,12 @@
 # Getting a Wireguard Server
+
 You can create your own wireguard server using a host service like DigitalOcean,
 or you can get a VPN service that provides WireGuard configs.
 
 I recommend ProtonVPN, because it is highly secure and has a great WireGuard
 config generator.
 
-Simply go to https://account.protonvpn.com/downloads and scroll down to the
+Simply go to <https://account.protonvpn.com/downloads> and scroll down to the
 wireguard section to generate your configs, then paste into the appropriate
 section below.
 
@@ -25,9 +26,11 @@ naming should also be similar (e.g.
 `/Users/jonny/Library/LaunchAgents/com.ProtonUS.adblock.plist`)
 
 ## Config File
+
 Make sure you use a unique port for every separate server
 I recommend you set proxy authentication, you can use the same user/pass for all
-```
+
+```ini
 # Link to the Downloaded config
 WGConfig = /Users/jonny/vpntabs/ProtonUS.adblock.server.conf
 
@@ -43,24 +46,27 @@ BindAddress = 127.0.0.1:25344 # Update the port here for each new server
 ```
 
 ## Startup Script File
+
 This is a bash script to facilitate startup, not strictly essential, but adds
 ease.
 Note, you MUST update the first path to wherever you installed this code to.
 Make sure you use the path for the config file above, not the one you downloaded
 from e.g. protonvpn.
-```
+
+```bash
 #!/bin/bash
 /Users/jonny/wireproxy/wireproxy -c /Users/jonny/vpntabs/ProtonUS.adblock.conf
 ```
 
 ## MacOS LaunchAgent
+
 To make it run every time you start your computer, you can create a launch agent
 in `$HOME/Library/LaunchAgents`. Name reference above.
 
 That file should contain the following, the label should be the same as the file
 name and the paths should be set correctly:
 
-```
+```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -70,7 +76,7 @@ name and the paths should be set correctly:
     <key>Program</key>
     <string>/Users/jonny/vpntabs/ProtonUS.adblock.sh</string>
     <key>RunAtLoad</key>
-	<true/>
+    <true/>
     <key>KeepAlive</key>
     <true/>
 </dict>
@@ -82,6 +88,7 @@ To enable it, run
 `launchtl start ~/Library/LaunchAgents/com.PortonUS.adblock.plist`
 
 # Firefox Setup
+
 You will need to enable the Multi Account Container Tabs extension and a proxy extension, I
 recommend Sideberry, but Container Proxy also works.
 

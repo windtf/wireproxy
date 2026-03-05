@@ -3,6 +3,7 @@ package wireproxy
 import (
 	"bytes"
 	"fmt"
+	"sync"
 
 	"net/netip"
 
@@ -81,10 +82,11 @@ func StartWireguard(conf *DeviceConfig, logLevel int) (*VirtualTun, error) {
 	}
 
 	return &VirtualTun{
-		Tnet:       tnet,
-		Dev:        dev,
-		Conf:       conf,
-		SystemDNS:  len(setting.DNS) == 0,
-		PingRecord: make(map[string]uint64),
+		Tnet:           tnet,
+		Dev:            dev,
+		Conf:           conf,
+		SystemDNS:      len(setting.DNS) == 0,
+		PingRecord:     make(map[string]uint64),
+		PingRecordLock: new(sync.Mutex),
 	}, nil
 }

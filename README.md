@@ -1,4 +1,5 @@
 # wireproxy
+
 [![ISC licensed](https://img.shields.io/badge/license-ISC-blue)](./LICENSE)
 [![Build status](https://github.com/octeep/wireproxy/actions/workflows/build.yml/badge.svg)](https://github.com/octeep/wireproxy/actions)
 [![Documentation](https://img.shields.io/badge/godoc-wireproxy-blue)](https://pkg.go.dev/github.com/octeep/wireproxy)
@@ -6,12 +7,14 @@
 A wireguard client that exposes itself as a socks5/http proxy or tunnels.
 
 # What is this
+
 `wireproxy` is a completely userspace application that connects to a wireguard peer,
 and exposes a socks5/http proxy or tunnels on the machine. This can be useful if you need
 to connect to certain sites via a wireguard peer, but can't be bothered to setup a new network
 interface for whatever reasons.
 
 # Why you might want this
+
 - You simply want to use wireguard as a way to proxy some traffic.
 - You don't want root permission just to change wireguard settings.
 
@@ -20,23 +23,33 @@ and configured my browser to use wireproxy for certain sites. It's pretty useful
 wireproxy is completely isolated from my network interfaces, and I don't need root to configure
 anything.
 
-Users who want something similar but for Amnezia VPN can use [this fork](https://github.com/juev/wireproxy/tree/feature/amnezia-go)
-of wireproxy by [@juev](https://github.com/juev).
+Users who want something similar but for Amnezia VPN can use [this fork](https://github.com/artem-russkikh/wireproxy-awg)
+of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
+
+# Sponsor
+
+This project is supported by [IPRoyal](https://iproyal.com/?r=795836). You can get premium quality proxies at unbeatable prices
+with a discount using [this referral link](https://iproyal.com/?r=795836)! 🚀
+
+![IPRoyal](/assets/iproyal.png)
 
 # Feature
+
 - TCP static routing for client and server
 - SOCKS5/HTTP proxy (currently only CONNECT is supported)
 
 # TODO
+
 - UDP Support in SOCKS5
 - UDP static routing
 
 # Usage
-```
+
+```bash
 ./wireproxy [-c path to config]
 ```
 
-```
+```bash
 usage: wireproxy [-h|--help] [-c|--config "<value>"] [-s|--silent]
                  [-d|--daemon] [-i|--info "<value>"] [-v|--version]
                  [-n|--configtest]
@@ -54,21 +67,29 @@ Arguments:
   -v  --version     Print version
   -n  --configtest  Configtest mode. Only check the configuration file for
                     validity.
-
 ```
 
 # Build instruction
-```
+
+```bash
 git clone https://github.com/octeep/wireproxy
 cd wireproxy
 make
 ```
 
+# Install
+
+```bash
+go install github.com/pufferffish/wireproxy/cmd/wireproxy@v1.0.9 # or @latest
+```
+
 # Use with VPN
+
 Instructions for using wireproxy with Firefox container tabs and auto-start on MacOS can be found [here](/UseWithVPN.md).
 
 # Sample config file
-```
+
+```ini
 # The [Interface] and [Peer] configurations follow the same semantics and meaning
 # of a wg-quick configuration. To understand what these fields mean, please refer to:
 # https://wiki.archlinux.org/title/WireGuard#Persistent_configuration
@@ -139,7 +160,8 @@ BindAddress = 127.0.0.1:25345
 
 Alternatively, if you already have a wireguard config, you can import it in the
 wireproxy config file like this:
-```
+
+```ini
 WGConfig = <path to the wireguard config>
 
 # Same semantics as above
@@ -155,7 +177,8 @@ WGConfig = <path to the wireguard config>
 
 Having multiple peers is also supported. `AllowedIPs` would need to be specified
 such that wireproxy would know which peer to forward to.
-```
+
+```ini
 [Interface]
 Address = 10.254.254.40/32
 PrivateKey = XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX=
@@ -187,7 +210,8 @@ Target = service-three.servicenet:80
 ```
 
 Wireproxy can also allow peers to connect to it:
-```
+
+```ini
 [Interface]
 ListenPort = 5400
 ...
@@ -197,7 +221,9 @@ PublicKey = YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY=
 AllowedIPs = 10.254.254.100/32
 # Note there is no Endpoint defined here.
 ```
+
 # Health endpoint
+
 Wireproxy supports exposing a health endpoint for monitoring purposes.
 The argument `--info/-i` specifies an address and port (e.g. `localhost:9080`), which exposes a HTTP server that provides health status metric of the server.
 
@@ -208,7 +234,8 @@ Currently two endpoints are implemented:
 `/readyz`: This responds with a json which shows the last time a pong is received from an IP specified with `CheckAlive`. When `CheckAlive` is set, a ping is sent out to addresses in `CheckAlive` per `CheckAliveInterval` seconds (defaults to 5) via wireguard. If a pong has not been received from one of the addresses within the last `CheckAliveInterval` seconds (+2 seconds for some leeway to account for latency), then it would respond with a 503, otherwise a 200.
 
 For example:
-```
+
+```ini
 [Interface]
 PrivateKey = censored
 Address = 10.2.0.2/32
@@ -224,8 +251,10 @@ Endpoint = 149.34.244.174:51820
 [Socks5]
 BindAddress = 127.0.0.1:25344
 ```
+
 `/readyz` would respond with
-```
+
+```text
 < HTTP/1.1 503 Service Unavailable
 < Date: Thu, 11 Apr 2024 00:54:59 GMT
 < Content-Length: 35
@@ -235,15 +264,18 @@ BindAddress = 127.0.0.1:25344
 ```
 
 And for:
-```
+
+```ini
 [Interface]
 PrivateKey = censored
 Address = 10.2.0.2/32
 DNS = 10.2.0.1
 CheckAlive = 1.1.1.1
 ```
+
 `/readyz` would respond with
-```
+
+```text
 < HTTP/1.1 200 OK
 < Date: Thu, 11 Apr 2024 00:56:21 GMT
 < Content-Length: 23
@@ -257,4 +289,5 @@ If nothing is set for `CheckAlive`, an empty JSON object with 200 will be the re
 The peer which the ICMP ping packet is routed to depends on the `AllowedIPs` set for each peers.
 
 # Stargazers over time
+
 [![Stargazers over time](https://starchart.cc/octeep/wireproxy.svg)](https://starchart.cc/octeep/wireproxy)

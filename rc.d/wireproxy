@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# PROVIDE: wireproxy
+# REQUIRE: DAEMON
+# KEYWORD: nojail
+#
+
+#
+# Add the following lines to /etc/rc.conf to enable wireproxy:
+#
+#wireproxy_enable="YES"
+#
+
+. /etc/rc.subr
+
+name=wireproxy
+rcvar=wireproxy_enable
+
+load_rc_config $name
+procname="/bin/wireproxy"
+
+wireproxy_enable=${wireproxy_enable:-"NO"}
+
+wireproxy_bin=/bin/wireproxy
+wireproxy_conf=/etc/wireproxy.conf
+
+command=${wireproxy_bin}
+command_args="-s -d -c ${wireproxy_conf}"
+
+run_rc_command "$1"

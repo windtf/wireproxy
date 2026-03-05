@@ -11,8 +11,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-
-	"github.com/sourcegraph/conc"
 )
 
 const proxyAuthHeaderKey = "Proxy-Authorization"
@@ -33,23 +31,23 @@ func (s *HTTPServer) authenticate(req *http.Request) (int, error) {
 	}
 
 	auth := req.Header.Get(proxyAuthHeaderKey)
-	if auth != "" {
-		enc := strings.TrimPrefix(auth, "Basic ")
-		str, err := base64.StdEncoding.DecodeString(enc)
-		if err != nil {
-			return http.StatusNotAcceptable, fmt.Errorf("decode username and password failed: %w", err)
-		}
-		pairs := bytes.SplitN(str, []byte(":"), 2)
-		if len(pairs) != 2 {
-			return http.StatusLengthRequired, fmt.Errorf("username and password format invalid")
-		}
-		if s.auth.Valid(string(pairs[0]), string(pairs[1])) {
-			return 0, nil
-		}
-		return http.StatusUnauthorized, fmt.Errorf("username and password not matching")
+	if auth == "" {
+		return http.StatusProxyAuthRequired, fmt.Errorf("%s", http.StatusText(http.StatusProxyAuthRequired))
 	}
 
-	return http.StatusProxyAuthRequired, fmt.Errorf(http.StatusText(http.StatusProxyAuthRequired))
+	enc := strings.TrimPrefix(auth, "Basic ")
+	str, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return http.StatusNotAcceptable, fmt.Errorf("decode username and password failed: %w", err)
+	}
+	pairs := bytes.SplitN(str, []byte(":"), 2)
+	if len(pairs) != 2 {
+		return http.StatusLengthRequired, fmt.Errorf("username and password format invalid")
+	}
+	if s.auth.Valid(string(pairs[0]), string(pairs[1])) {
+		return 0, nil
+	}
+	return http.StatusUnauthorized, fmt.Errorf("username and password not matching")
 }
 
 func (s *HTTPServer) handleConn(req *http.Request, conn net.Conn) (peer net.Conn, err error) {
@@ -105,7 +103,11 @@ func (s *HTTPServer) serve(conn net.Conn) {
 
 	code, err := s.authenticate(req)
 	if err != nil {
-		_ = responseWith(req, code).Write(conn)
+		resp := responseWith(req, code)
+		if code == http.StatusProxyAuthRequired {
+			resp.Header.Set("Proxy-Authenticate", "Basic realm=\"Proxy\"")
+		}
+		_ = resp.Write(conn)
 		log.Println(err)
 		return
 	}
@@ -129,17 +131,19 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		log.Println("dial proxy failed: peer nil")
 		return
 	}
+
 	go func() {
-		wg := conc.NewWaitGroup()
-		wg.Go(func() {
-			_, err = io.Copy(conn, peer)
-			_ = conn.Close()
-		})
-		wg.Go(func() {
-			_, err = io.Copy(peer, conn)
-			_ = peer.Close()
-		})
-		wg.Wait()
+		defer conn.Close()
+		defer peer.Close()
+
+		_, _ = io.Copy(conn, peer)
+	}()
+
+	go func() {
+		defer conn.Close()
+		defer peer.Close()
+
+		_, _ = io.Copy(peer, conn)
 	}()
 }
 

@@ -33,6 +33,12 @@ type DeviceConfig struct {
 	CheckAliveInterval int
 }
 
+type UDPProxyTunnelConfig struct {
+	BindAddress       string
+	Target            string
+	InactivityTimeout int
+}
+
 type TCPClientTunnelConfig struct {
 	BindAddress *net.TCPAddr
 	Target      string
@@ -40,6 +46,8 @@ type TCPClientTunnelConfig struct {
 
 type STDIOTunnelConfig struct {
 	Target string
+	Input  *os.File
+	Output *os.File
 }
 
 type TCPServerTunnelConfig struct {
@@ -328,7 +336,8 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 			peer.PreSharedKey = value
 		}
 
-		if value, err := parseString(section, "Endpoint"); err == nil {
+		if sectionKey, err := section.GetKey("Endpoint"); err == nil {
+			value := sectionKey.String()
 			decoded, err = resolveIPPAndPort(strings.ToLower(value))
 			if err != nil {
 				return err
@@ -378,6 +387,8 @@ func parseSTDIOTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 		return nil, err
 	}
 	config.Target = targetSection
+	config.Input = os.Stdin
+	config.Output = os.Stdout
 
 	return config, nil
 }
@@ -438,6 +449,34 @@ func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 
 	keyFile, _ := parseString(section, "KeyFile")
 	config.KeyFile = keyFile
+
+	return config, nil
+}
+
+func parseUDPProxyTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
+	config := &UDPProxyTunnelConfig{}
+
+	bindAddress, err := parseString(section, "BindAddress")
+	if err != nil {
+		return nil, err
+	}
+	config.BindAddress = bindAddress
+
+	target, err := parseString(section, "Target")
+	if err != nil {
+		return nil, err
+	}
+	config.Target = target
+
+	inactivityTimeout := 0
+	if sectionKey, err := section.GetKey("InactivityTimeout"); err == nil {
+		timeoutVal, err := sectionKey.Int()
+		if err != nil {
+			return nil, err
+		}
+		inactivityTimeout = timeoutVal
+	}
+	config.InactivityTimeout = inactivityTimeout
 
 	return config, nil
 }
@@ -522,6 +561,11 @@ func ParseConfig(path string) (*Configuration, error) {
 	}
 
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "http", parseHTTPConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parseRoutinesConfig(&routinesSpawners, cfg, "UDPProxyTunnel", parseUDPProxyTunnelConfig)
 	if err != nil {
 		return nil, err
 	}

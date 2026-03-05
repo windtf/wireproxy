@@ -80,6 +80,7 @@ func lock(stage string) {
 		// Linux
 		panicIfError(landlock.V1.BestEffort().RestrictPaths(
 			landlock.RODirs("/"),
+			landlock.RWFiles("/dev/null").IgnoreIfMissing(),
 		))
 	case "boot-daemon":
 	case "read-config":
@@ -236,7 +237,7 @@ func main() {
 	// Wireguard doesn't allow configuring which FD to use for logging
 	// https://github.com/WireGuard/wireguard-go/blob/master/device/logger.go#L39
 	// so redirect STDOUT to STDERR, we don't want to print anything to STDOUT anyways
-	os.Stdout = os.NewFile(uintptr(syscall.Stderr), "/dev/stderr")
+	os.Stdout = os.Stderr
 	logLevel := device.LogLevelVerbose
 	if *silent {
 		logLevel = device.LogLevelSilent
