@@ -230,7 +230,7 @@ func STDIOTcpForward(vt *VirtualTun, raddr *addressPort, input *os.File, output 
 		return
 	}
 
-	tcpAddr := TCPAddrFromAddrPort(*target)
+	tcpAddr := net.TCPAddrFromAddrPort(*target)
 	sconn, err := vt.Tnet.DialTCP(tcpAddr)
 	if err != nil {
 		errorLogger.Printf("TCP Client Tunnel to %s (%s): %s\n", target, tcpAddr, err.Error())
