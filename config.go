@@ -33,6 +33,12 @@ type DeviceConfig struct {
 	CheckAliveInterval int
 }
 
+type UDPProxyTunnelConfig struct {
+	BindAddress       string
+	Target            string
+	InactivityTimeout int
+}
+
 type TCPClientTunnelConfig struct {
 	BindAddress *net.TCPAddr
 	Target      string
@@ -40,6 +46,8 @@ type TCPClientTunnelConfig struct {
 
 type STDIOTunnelConfig struct {
 	Target string
+	Input  *os.File
+	Output *os.File
 }
 
 type TCPServerTunnelConfig struct {
@@ -382,6 +390,8 @@ func parseSTDIOTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 		return nil, err
 	}
 	config.Target = targetSection
+	config.Input = os.Stdin
+	config.Output = os.Stdout
 
 	return config, nil
 }
@@ -445,6 +455,34 @@ func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
 
 	resolvStrategy, _ := parseString(section, "ResolveStrategy")
 	config.ResolveStrategy = resolvStrategy
+  
+	return config, nil
+}
+
+func parseUDPProxyTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
+	config := &UDPProxyTunnelConfig{}
+
+	bindAddress, err := parseString(section, "BindAddress")
+	if err != nil {
+		return nil, err
+	}
+	config.BindAddress = bindAddress
+
+	target, err := parseString(section, "Target")
+	if err != nil {
+		return nil, err
+	}
+	config.Target = target
+
+	inactivityTimeout := 0
+	if sectionKey, err := section.GetKey("InactivityTimeout"); err == nil {
+		timeoutVal, err := sectionKey.Int()
+		if err != nil {
+			return nil, err
+		}
+		inactivityTimeout = timeoutVal
+	}
+	config.InactivityTimeout = inactivityTimeout
 
 	return config, nil
 }
@@ -541,7 +579,12 @@ func ParseConfig(path string) (*Configuration, error) {
 		resolve, err = parseResolveConfig(resolveSection)
 		if err != nil {
 			return nil, err
-		}
+	  }
+  }
+    
+	err = parseRoutinesConfig(&routinesSpawners, cfg, "UDPProxyTunnel", parseUDPProxyTunnelConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Configuration{
