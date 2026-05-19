@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-ini/ini"
@@ -540,7 +541,14 @@ func ParseConfig(path string) (*Configuration, error) {
 	wgConf, err := root.GetKey("WGConfig")
 	wgCfg := cfg
 	if err == nil {
-		wgCfg, err = ini.LoadSources(iniOpt, wgConf.String())
+		wgPath := wgConf.String()
+		// A bare filename (no path separators) is resolved relative to the
+		// directory of the parent config file, so the wg config can sit
+		// alongside the wireproxy config without needing a full path.
+		if filepath.Base(wgPath) == wgPath {
+			wgPath = filepath.Join(filepath.Dir(path), wgPath)
+		}
+		wgCfg, err = ini.LoadSources(iniOpt, wgPath)
 		if err != nil {
 			return nil, err
 		}
