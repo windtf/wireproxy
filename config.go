@@ -62,6 +62,10 @@ type Socks5Config struct {
 	Password    string
 }
 
+type SNIConfig struct {
+	BindAddress string
+}
+
 type HTTPConfig struct {
 	BindAddress string
 	Username    string
@@ -435,6 +439,18 @@ func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 	return config, nil
 }
 
+func parseSNIConfig(section *ini.Section) (RoutineSpawner, error) {
+	config := &SNIConfig{}
+
+	bindAddress, err := parseString(section, "BindAddress")
+	if err != nil {
+		return nil, err
+	}
+	config.BindAddress = bindAddress
+
+	return config, nil
+}
+
 func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 	config := &HTTPConfig{}
 
@@ -587,6 +603,11 @@ func ParseConfig(path string) (*Configuration, error) {
 	}
 
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "http", parseHTTPConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parseRoutinesConfig(&routinesSpawners, cfg, "SNI", parseSNIConfig)
 	if err != nil {
 		return nil, err
 	}

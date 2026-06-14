@@ -148,6 +148,8 @@ func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
 			rules = append(rules, landlock.ConnectTCP(uint16(section.BindAddress.Port)))
 		case *wireproxy.Socks5Config:
 			rules = append(rules, landlock.BindTCP(extractPort(section.BindAddress)))
+		case *wireproxy.SNIConfig:
+			rules = append(rules, landlock.BindTCP(extractPort(section.BindAddress)))
 		}
 	}
 

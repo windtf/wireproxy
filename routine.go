@@ -332,6 +332,22 @@ func (conf *TCPServerTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 	}
 }
 
+// SpawnRoutine spawns an SNI proxy server.
+func (config *SNIConfig) SpawnRoutine(vt *VirtualTun) {
+	listener, err := net.Listen("tcp", config.BindAddress)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Fatal(err)
+		}
+		go sniServe(vt.Tnet.Dial, conn)
+	}
+}
+
 func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Health metric request: %s\n", r.URL.Path)
 	switch path.Clean(r.URL.Path) {
