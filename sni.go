@@ -51,6 +51,7 @@ func peekClientHello(conn net.Conn) (string, io.ReadWriteCloser, error) {
 	var serverName string
 	if hello != nil {
 		serverName = hello.ServerName
+		err = nil
 	}
 
 	return serverName, wrappedConn, err
