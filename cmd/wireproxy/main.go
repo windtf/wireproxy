@@ -68,7 +68,25 @@ func configFilePath() (string, bool) {
 	return "", false
 }
 
-func lock(stage string) {
+// get the file paths for TLS cert and key from the config
+func tlsFilePaths(routines []wireproxy.RoutineSpawner) []string {
+	var paths []string
+	for _, routine := range routines {
+		http, ok := routine.(*wireproxy.HTTPConfig)
+		if !ok {
+			continue
+		}
+		if http.CertFile != "" {
+			paths = append(paths, http.CertFile)
+		}
+		if http.KeyFile != "" {
+			paths = append(paths, http.KeyFile)
+		}
+	}
+	return paths
+}
+
+func lock(stage string, roFilles ...string) {
 	switch stage {
 	case "boot":
 		exePath := executablePath()
@@ -93,7 +111,11 @@ func lock(stage string) {
 		pledgeOrPanic("stdio inet dns")
 		// Linux
 		net.DefaultResolver.PreferGo = true // needed to lock down dependencies
-		panicIfError(landlock.V1.BestEffort().RestrictPaths(
+
+		// We need to define the static rules beforehand,
+		// so we can add the provided dynamic rules
+
+		rules := []landlock.Rule{
 			landlock.ROFiles("/etc/resolv.conf").IgnoreIfMissing(),
 			landlock.ROFiles("/dev/fd").IgnoreIfMissing(),
 			landlock.ROFiles("/dev/zero").IgnoreIfMissing(),
@@ -112,7 +134,16 @@ func lock(stage string) {
 			landlock.RWFiles("/dev/null").IgnoreIfMissing(),
 			landlock.RWFiles("/dev/full").IgnoreIfMissing(),
 			landlock.RWFiles("/proc/self/fd").IgnoreIfMissing(),
-		))
+		}
+
+		if len(roFilles) > 0 {
+			for _, file := range roFilles {
+				rules = append(rules, landlock.ROFiles(file).IgnoreIfMissing())
+			}
+		}
+
+		panicIfError(landlock.V1.BestEffort().RestrictPaths(rules...))
+
 	default:
 		panic("invalid stage")
 	}
@@ -246,7 +277,7 @@ func main() {
 		logLevel = device.LogLevelSilent
 	}
 
-	lock("ready")
+	lock("ready", tlsFilePaths(conf.Routines)...)
 
 	tun, err := wireproxy.StartWireguard(conf, logLevel)
 	if err != nil {
