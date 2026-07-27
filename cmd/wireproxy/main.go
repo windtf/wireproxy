@@ -176,7 +176,7 @@ func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
 		case *wireproxy.HTTPConfig:
 			rules = append(rules, landlock.BindTCP(extractPort(section.BindAddress)))
 		case *wireproxy.TCPClientTunnelConfig:
-			rules = append(rules, landlock.ConnectTCP(uint16(section.BindAddress.Port)))
+			rules = append(rules, landlock.BindTCP(uint16(section.BindAddress.Port)))
 		case *wireproxy.Socks5Config:
 			rules = append(rules, landlock.BindTCP(extractPort(section.BindAddress)))
 		case *wireproxy.SNIConfig:
