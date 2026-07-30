@@ -155,6 +155,46 @@ func (d VirtualTun) resolveToAddrPort(endpoint *addressPort) (*netip.AddrPort, e
 	return &addrPort, nil
 }
 
+// passthroughResolver is a socks5 NameResolver that performs no resolution: it
+// leaves the FQDN untouched (returns a nil IP) so the FQDN survives to the dial
+// callback, where the domain-based routing decision is made. Resolution then
+// happens on the chosen network — the tunnel netstack for tunnelled hosts, the
+// system resolver for direct hosts.
+type passthroughResolver struct{}
+
+func (passthroughResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	return ctx, nil, nil
+}
+
+// RoutedDial returns a dialer that sends whitelisted hosts through the tunnel
+// and dials everything else directly. Used by the HTTP and SNI proxies, whose
+// dial callbacks receive the destination hostname intact.
+func (d VirtualTun) RoutedDial(router *DomainRouter) func(network, address string) (net.Conn, error) {
+	return func(network, address string) (net.Conn, error) {
+		if router.route(hostFromAddr(address)) {
+			return d.Tnet.Dial(network, address)
+		}
+		return net.Dial(network, address)
+	}
+}
+
+// routedSocks5Dial returns a socks5 dial-with-request callback that routes based
+// on the original destination FQDN (preserved on request.DestAddr), falling back
+// to the address host for IP-literal targets.
+func (d VirtualTun) routedSocks5Dial(router *DomainRouter) func(context.Context, string, string, *socks5.Request) (net.Conn, error) {
+	return func(ctx context.Context, network, address string, request *socks5.Request) (net.Conn, error) {
+		host := request.DestAddr.FQDN
+		if host == "" {
+			host = hostFromAddr(address)
+		}
+		if router.route(host) {
+			return d.Tnet.DialContext(ctx, network, address)
+		}
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, network, address)
+	}
+}
+
 // SpawnRoutine spawns a socks5 server.
 func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
 	var authMethods []socks5.Authenticator
@@ -167,10 +207,23 @@ func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
 	}
 
 	options := []socks5.Option{
-		socks5.WithDial(vt.Tnet.DialContext),
-		socks5.WithResolver(vt),
 		socks5.WithAuthMethods(authMethods),
 		socks5.WithBufferPool(bufferpool.NewPool(256 * 1024)),
+	}
+
+	if len(config.TunnelDomains) == 0 && !config.LogDomains {
+		// Legacy path: everything through the tunnel, resolved via tunnel DNS.
+		options = append(options,
+			socks5.WithDial(vt.Tnet.DialContext),
+			socks5.WithResolver(vt),
+		)
+	} else {
+		// Split-routing path: keep the FQDN so we can decide per connection.
+		router := NewDomainRouter(config.TunnelDomains, config.LogDomains)
+		options = append(options,
+			socks5.WithDialAndRequest(vt.routedSocks5Dial(router)),
+			socks5.WithResolver(passthroughResolver{}),
+		)
 	}
 
 	server := socks5.NewServer(options...)
@@ -182,9 +235,10 @@ func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
 
 // SpawnRoutine spawns a http server.
 func (config *HTTPConfig) SpawnRoutine(vt *VirtualTun) {
+	router := NewDomainRouter(config.TunnelDomains, config.LogDomains)
 	server := &HTTPServer{
 		config: config,
-		dial:   vt.Tnet.Dial,
+		dial:   vt.RoutedDial(router),
 		auth:   CredentialValidator{config.Username, config.Password},
 	}
 	if config.Username != "" || config.Password != "" {
@@ -334,6 +388,9 @@ func (conf *TCPServerTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 
 // SpawnRoutine spawns an SNI proxy server.
 func (config *SNIConfig) SpawnRoutine(vt *VirtualTun) {
+	router := NewDomainRouter(config.TunnelDomains, config.LogDomains)
+	dial := vt.RoutedDial(router)
+
 	listener, err := net.Listen("tcp", config.BindAddress)
 	if err != nil {
 		log.Fatal(err)
@@ -344,7 +401,7 @@ func (config *SNIConfig) SpawnRoutine(vt *VirtualTun) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go sniServe(vt.Tnet.Dial, conn)
+		go sniServe(dial, conn)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-ini/ini"
@@ -57,21 +58,27 @@ type TCPServerTunnelConfig struct {
 }
 
 type Socks5Config struct {
-	BindAddress string
-	Username    string
-	Password    string
+	BindAddress   string
+	Username      string
+	Password      string
+	TunnelDomains []*regexp.Regexp
+	LogDomains    bool
 }
 
 type SNIConfig struct {
-	BindAddress string
+	BindAddress   string
+	TunnelDomains []*regexp.Regexp
+	LogDomains    bool
 }
 
 type HTTPConfig struct {
-	BindAddress string
-	Username    string
-	Password    string
-	CertFile    string
-	KeyFile     string
+	BindAddress   string
+	Username      string
+	Password      string
+	CertFile      string
+	KeyFile       string
+	TunnelDomains []*regexp.Regexp
+	LogDomains    bool
 }
 
 type ResolveConfig struct {
@@ -421,6 +428,41 @@ func parseTCPServerTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 	return config, nil
 }
 
+// parseRegexList reads a whitelist of regular expressions from a section key.
+// Each occurrence of the key (one per line; AllowShadows is enabled) is treated
+// as a single, complete regex — the value is NOT split on commas, so quantifiers
+// like `a{2,4}` work. An absent key yields no patterns. An invalid pattern is a
+// configuration error, so --configtest rejects it before any traffic flows.
+func parseRegexList(section *ini.Section, keyName string) ([]*regexp.Regexp, error) {
+	key, err := section.GetKey(keyName)
+	if err != nil {
+		return nil, nil
+	}
+
+	var patterns []*regexp.Regexp
+	for _, raw := range key.ValueWithShadows() {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		re, cerr := regexp.Compile(raw)
+		if cerr != nil {
+			return nil, errors.New("invalid " + keyName + " regex `" + raw + "`: " + cerr.Error())
+		}
+		patterns = append(patterns, re)
+	}
+	return patterns, nil
+}
+
+// parseBoolKey reads an optional boolean key, defaulting to false when absent.
+func parseBoolKey(section *ini.Section, keyName string) (bool, error) {
+	key, err := section.GetKey(keyName)
+	if err != nil {
+		return false, nil
+	}
+	return key.Bool()
+}
+
 func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 	config := &Socks5Config{}
 
@@ -436,6 +478,18 @@ func parseSocks5Config(section *ini.Section) (RoutineSpawner, error) {
 	password, _ := parseString(section, "Password")
 	config.Password = password
 
+	tunnelDomains, err := parseRegexList(section, "TunnelDomains")
+	if err != nil {
+		return nil, err
+	}
+	config.TunnelDomains = tunnelDomains
+
+	logDomains, err := parseBoolKey(section, "LogDomains")
+	if err != nil {
+		return nil, err
+	}
+	config.LogDomains = logDomains
+
 	return config, nil
 }
 
@@ -447,6 +501,18 @@ func parseSNIConfig(section *ini.Section) (RoutineSpawner, error) {
 		return nil, err
 	}
 	config.BindAddress = bindAddress
+
+	tunnelDomains, err := parseRegexList(section, "TunnelDomains")
+	if err != nil {
+		return nil, err
+	}
+	config.TunnelDomains = tunnelDomains
+
+	logDomains, err := parseBoolKey(section, "LogDomains")
+	if err != nil {
+		return nil, err
+	}
+	config.LogDomains = logDomains
 
 	return config, nil
 }
@@ -471,6 +537,18 @@ func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 
 	keyFile, _ := parseString(section, "KeyFile")
 	config.KeyFile = keyFile
+
+	tunnelDomains, err := parseRegexList(section, "TunnelDomains")
+	if err != nil {
+		return nil, err
+	}
+	config.TunnelDomains = tunnelDomains
+
+	logDomains, err := parseBoolKey(section, "LogDomains")
+	if err != nil {
+		return nil, err
+	}
+	config.LogDomains = logDomains
 
 	return config, nil
 }
