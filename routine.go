@@ -268,7 +268,7 @@ func connForward(from io.ReadWriteCloser, to io.ReadWriteCloser) {
 	defer func() { _ = to.Close() }()
 
 	_, err := io.Copy(to, from)
-	if err != nil {
+	if err != nil && !errors.Is(err, net.ErrClosed) {
 		errorLogger.Printf("Cannot forward traffic: %s\n", err.Error())
 	}
 }
