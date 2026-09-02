@@ -319,6 +319,9 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 		if len(checkAlive) == 0 {
 			return errors.New("CheckAliveInterval is only valid when CheckAlive is set")
 		}
+		if value <= 0 {
+			return errors.New("CheckAliveInterval should be greater than zero")
+		}
 
 		device.CheckAliveInterval = value
 	}
@@ -558,7 +561,7 @@ func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
 
 	resolvStrategy, _ := parseString(section, "ResolveStrategy")
 	config.ResolveStrategy = resolvStrategy
-  
+
 	return config, nil
 }
 
@@ -582,6 +585,9 @@ func parseUDPProxyTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 		timeoutVal, err := sectionKey.Int()
 		if err != nil {
 			return nil, err
+		}
+		if timeoutVal < 0 {
+			return nil, errors.New("InactivityTimeout should not be negative")
 		}
 		inactivityTimeout = timeoutVal
 	}
@@ -694,9 +700,9 @@ func ParseConfig(path string) (*Configuration, error) {
 		resolve, err = parseResolveConfig(resolveSection)
 		if err != nil {
 			return nil, err
-	  }
-  }
-    
+		}
+	}
+
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "UDPProxyTunnel", parseUDPProxyTunnelConfig)
 	if err != nil {
 		return nil, err

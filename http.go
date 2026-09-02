@@ -94,6 +94,7 @@ func (s *HTTPServer) handle(req *http.Request) (peer net.Conn, err error) {
 }
 
 func (s *HTTPServer) serve(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {

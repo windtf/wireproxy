@@ -277,6 +277,7 @@ func connForward(from io.ReadWriteCloser, to io.ReadWriteCloser) {
 func tcpClientForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 	target, err := vt.resolveToAddrPort(raddr)
 	if err != nil {
+		_ = conn.Close()
 		errorLogger.Printf("TCP Server Tunnel to %s: %s\n", target, err.Error())
 		return
 	}
@@ -285,6 +286,7 @@ func tcpClientForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 
 	sconn, err := vt.Tnet.DialTCP(tcpAddr)
 	if err != nil {
+		_ = conn.Close()
 		errorLogger.Printf("TCP Client Tunnel to %s: %s\n", target, err.Error())
 		return
 	}
@@ -347,6 +349,7 @@ func (conf *STDIOTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 	target, err := vt.resolveToAddrPort(raddr)
 	if err != nil {
+		_ = conn.Close()
 		errorLogger.Printf("TCP Server Tunnel to %s: %s\n", target, err.Error())
 		return
 	}
@@ -355,6 +358,7 @@ func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 
 	sconn, err := net.DialTCP("tcp", nil, tcpAddr)
 	if err != nil {
+		_ = conn.Close()
 		errorLogger.Printf("TCP Server Tunnel to %s: %s\n", target, err.Error())
 		return
 	}
@@ -409,7 +413,14 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Health metric request: %s\n", r.URL.Path)
 	switch path.Clean(r.URL.Path) {
 	case "/readyz":
-		body, err := json.Marshal(d.PingRecord)
+		d.PingRecordLock.Lock()
+		records := make(map[string]uint64, len(d.PingRecord))
+		for addr, record := range d.PingRecord {
+			records[addr] = record
+		}
+		d.PingRecordLock.Unlock()
+
+		body, err := json.Marshal(records)
 		if err != nil {
 			errorLogger.Printf("Failed to get device metrics: %s\n", err.Error())
 			w.WriteHeader(http.StatusInternalServerError)
@@ -417,7 +428,7 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		status := http.StatusOK
-		for _, record := range d.PingRecord {
+		for _, record := range records {
 			lastPong := time.Unix(int64(record), 0)
 			// +2 seconds to account for the time it takes to ping the IP
 			if time.Since(lastPong) > time.Duration(d.Conf.CheckAliveInterval+2)*time.Second {
@@ -466,9 +477,18 @@ func (d VirtualTun) pingIPs() {
 			errorLogger.Printf("Failed to ping %s: %s\n", addr, err.Error())
 			continue
 		}
+		if !addr.Is4() && !addr.Is6() {
+			errorLogger.Printf("Failed to ping %s: invalid address: %s\n", addr, addr.String())
+			_ = socket.Close()
+			continue
+		}
 
 		data := make([]byte, 16)
-		_, _ = srand.Read(data)
+		if _, err := srand.Read(data); err != nil {
+			errorLogger.Printf("Failed to generate ping data for %s: %s\n", addr, err.Error())
+			_ = socket.Close()
+			continue
+		}
 
 		requestPing := icmp.Echo{
 			Seq:  rand.Intn(1 << 16),
@@ -477,30 +497,38 @@ func (d VirtualTun) pingIPs() {
 
 		var icmpBytes []byte
 		if addr.Is4() {
-			icmpBytes, _ = (&icmp.Message{Type: ipv4.ICMPTypeEcho, Code: 0, Body: &requestPing}).Marshal(nil)
+			icmpBytes, err = (&icmp.Message{Type: ipv4.ICMPTypeEcho, Code: 0, Body: &requestPing}).Marshal(nil)
 		} else if addr.Is6() {
-			icmpBytes, _ = (&icmp.Message{Type: ipv6.ICMPTypeEchoRequest, Code: 0, Body: &requestPing}).Marshal(nil)
-		} else {
-			errorLogger.Printf("Failed to ping %s: invalid address: %s\n", addr, addr.String())
+			icmpBytes, err = (&icmp.Message{Type: ipv6.ICMPTypeEchoRequest, Code: 0, Body: &requestPing}).Marshal(nil)
+		}
+		if err != nil {
+			errorLogger.Printf("Failed to marshal ping request for %s: %s\n", addr, err.Error())
+			_ = socket.Close()
 			continue
 		}
 
-		_ = socket.SetReadDeadline(time.Now().Add(time.Duration(d.Conf.CheckAliveInterval) * time.Second))
+		if err := socket.SetReadDeadline(time.Now().Add(time.Duration(d.Conf.CheckAliveInterval) * time.Second)); err != nil {
+			errorLogger.Printf("Failed to set ping deadline for %s: %s\n", addr, err.Error())
+			_ = socket.Close()
+			continue
+		}
 		_, err = socket.Write(icmpBytes)
 		if err != nil {
 			errorLogger.Printf("Failed to ping %s: %s\n", addr, err.Error())
+			_ = socket.Close()
 			continue
 		}
 
-		addr := addr
-		go func() {
-			n, err := socket.Read(icmpBytes[:])
+		go func(addr netip.Addr, socket net.Conn, requestPing icmp.Echo) {
+			defer func() { _ = socket.Close() }()
+			readBytes := make([]byte, 1500)
+			n, err := socket.Read(readBytes)
 			if err != nil {
 				errorLogger.Printf("Failed to read ping response from %s: %s\n", addr, err.Error())
 				return
 			}
 
-			replyPacket, err := icmp.ParseMessage(1, icmpBytes[:n])
+			replyPacket, err := icmp.ParseMessage(1, readBytes[:n])
 			if err != nil {
 				errorLogger.Printf("Failed to parse ping response from %s: %s\n", addr, err.Error())
 				return
@@ -524,6 +552,10 @@ func (d VirtualTun) pingIPs() {
 					errorLogger.Printf("Failed to parse ping response from %s: invalid reply type: %s\n", addr, replyPacket.Type)
 					return
 				}
+				if len(replyPing.Data) < 4 {
+					errorLogger.Printf("Failed to parse ping response from %s: reply too short\n", addr)
+					return
+				}
 
 				seq := binary.BigEndian.Uint16(replyPing.Data[2:4])
 				pongBody := replyPing.Data[4:]
@@ -536,9 +568,7 @@ func (d VirtualTun) pingIPs() {
 			d.PingRecordLock.Lock()
 			d.PingRecord[addr.String()] = uint64(time.Now().Unix())
 			d.PingRecordLock.Unlock()
-
-			defer func() { _ = socket.Close() }()
-		}()
+		}(addr, socket, requestPing)
 	}
 }
 
