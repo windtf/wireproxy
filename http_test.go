@@ -25,7 +25,7 @@ func TestHTTPServerServeGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	go func() {
 		conn, err := listener.Accept()
@@ -39,7 +39,7 @@ func TestHTTPServerServeGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	req, err := http.NewRequest(http.MethodGet, "http://"+ts.Listener.Addr().String()+"/test", nil)
 	if err != nil {
@@ -54,7 +54,7 @@ func TestHTTPServerServeGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read response: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestHTTPServerServeFailureClosesConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	go func() {
 		conn, err := listener.Accept()
@@ -86,7 +86,7 @@ func TestHTTPServerServeFailureClosesConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	// Send invalid HTTP request
 	if _, err := clientConn.Write([]byte("INVALID\r\n\r\n")); err != nil {
