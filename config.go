@@ -35,8 +35,18 @@ type DeviceConfig struct {
 	CheckAliveInterval int
 }
 
+// UDPProxyTunnelConfig listens on the local machine and forwards UDP traffic
+// through WireGuard to a fixed target.
 type UDPProxyTunnelConfig struct {
 	BindAddress       string
+	Target            string
+	InactivityTimeout int
+}
+
+// UDPServerTunnelConfig listens on the WireGuard side and forwards UDP
+// traffic to a target reachable from the local network.
+type UDPServerTunnelConfig struct {
+	ListenPort        int
 	Target            string
 	InactivityTimeout int
 }
@@ -565,6 +575,22 @@ func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
 	return config, nil
 }
 
+// parseInactivityTimeout reads the optional InactivityTimeout key shared by
+// the UDP tunnel sections. A missing key means "never expire".
+func parseInactivityTimeout(section *ini.Section) (int, error) {
+	if sectionKey, err := section.GetKey("InactivityTimeout"); err == nil {
+		timeoutVal, err := sectionKey.Int()
+		if err != nil {
+			return 0, err
+		}
+		if timeoutVal < 0 {
+			return 0, errors.New("InactivityTimeout should not be negative")
+		}
+		return timeoutVal, nil
+	}
+	return 0, nil
+}
+
 func parseUDPProxyTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 	config := &UDPProxyTunnelConfig{}
 
@@ -578,18 +604,41 @@ func parseUDPProxyTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
 	if err != nil {
 		return nil, err
 	}
+	if target == "" {
+		return nil, errors.New("Target should not be empty")
+	}
 	config.Target = target
 
-	inactivityTimeout := 0
-	if sectionKey, err := section.GetKey("InactivityTimeout"); err == nil {
-		timeoutVal, err := sectionKey.Int()
-		if err != nil {
-			return nil, err
-		}
-		if timeoutVal < 0 {
-			return nil, errors.New("InactivityTimeout should not be negative")
-		}
-		inactivityTimeout = timeoutVal
+	inactivityTimeout, err := parseInactivityTimeout(section)
+	if err != nil {
+		return nil, err
+	}
+	config.InactivityTimeout = inactivityTimeout
+
+	return config, nil
+}
+
+func parseUDPServerTunnelConfig(section *ini.Section) (RoutineSpawner, error) {
+	config := &UDPServerTunnelConfig{}
+
+	listenPort, err := parsePort(section, "ListenPort")
+	if err != nil {
+		return nil, err
+	}
+	config.ListenPort = listenPort
+
+	target, err := parseString(section, "Target")
+	if err != nil {
+		return nil, err
+	}
+	if target == "" {
+		return nil, errors.New("Target should not be empty")
+	}
+	config.Target = target
+
+	inactivityTimeout, err := parseInactivityTimeout(section)
+	if err != nil {
+		return nil, err
 	}
 	config.InactivityTimeout = inactivityTimeout
 
@@ -677,6 +726,11 @@ func ParseConfig(path string) (*Configuration, error) {
 	}
 
 	err = parseRoutinesConfig(&routinesSpawners, cfg, "TCPServerTunnel", parseTCPServerTunnelConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parseRoutinesConfig(&routinesSpawners, cfg, "UDPServerTunnel", parseUDPServerTunnelConfig)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package wireproxy
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -142,14 +143,13 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 	}()
 }
 
-// handles data from the remote WireGuard side back to the local client
-// this function blocks until the session is closed
-func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, srcAddr string, s *udpSession, removeSession func(string, *udpSession)) {
-	defer func() {
-		removeSession(srcAddr, s)
-	}()
-	buf := make([]byte, 64*1024)
+// forwardRemoteToPeer copies datagrams received from s.remoteConn back to the
+// peer that owns the listener-side session. It blocks until the session is
+// closed or the remote connection fails, and always calls onDone on exit.
+func forwardRemoteToPeer(listener net.PacketConn, peer net.Addr, s *udpSession, onDone func()) {
+	defer onDone()
 
+	buf := make([]byte, 64*1024)
 	for {
 		select {
 		case <-s.closeChan:
@@ -158,7 +158,7 @@ func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, src
 		}
 
 		if err := s.remoteConn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			errorLogger.Printf("UDPProxyTunnel: could not set remote read deadline: %v", err)
+			errorLogger.Printf("UDP relay: could not set remote read deadline: %v", err)
 			return
 		}
 		n, err := s.remoteConn.Read(buf)
@@ -172,22 +172,33 @@ func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, src
 					continue
 				}
 			}
-			errorLogger.Printf("UDPProxyTunnel: read error from remote: %v", err)
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			errorLogger.Printf("UDP relay: read error from remote: %v", err)
 			return
 		}
 
 		s.touch()
 
-		dstUDPAddr, err := net.ResolveUDPAddr("udp", srcAddr)
-		if err != nil {
-			errorLogger.Printf("UDPProxyTunnel: cannot resolve local address %s: %v", srcAddr, err)
-			return
-		}
-
-		_, err = listener.WriteToUDP(buf[:n], dstUDPAddr)
-		if err != nil {
-			errorLogger.Printf("UDPProxyTunnel: cannot write to local %s: %v", srcAddr, err)
+		if _, err := listener.WriteTo(buf[:n], peer); err != nil {
+			errorLogger.Printf("UDP relay: cannot write to peer %s: %v", peer, err)
 			return
 		}
 	}
+}
+
+// handles data from the remote WireGuard side back to the local client
+// this function blocks until the session is closed
+func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, srcAddr string, s *udpSession, removeSession func(string, *udpSession)) {
+	dstUDPAddr, err := net.ResolveUDPAddr("udp", srcAddr)
+	if err != nil {
+		errorLogger.Printf("UDPProxyTunnel: cannot resolve local address %s: %v", srcAddr, err)
+		removeSession(srcAddr, s)
+		return
+	}
+
+	forwardRemoteToPeer(listener, dstUDPAddr, s, func() {
+		removeSession(srcAddr, s)
+	})
 }
