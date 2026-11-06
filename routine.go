@@ -166,15 +166,26 @@ func (passthroughResolver) Resolve(ctx context.Context, name string) (context.Co
 	return ctx, nil, nil
 }
 
+// RoutedDialContext returns a context-aware dialer that sends whitelisted
+// hosts through the tunnel and dials everything else directly. It is used by
+// the SOCKS5 UDP relay, where each datagram is dialed independently.
+func (d VirtualTun) RoutedDialContext(router *DomainRouter) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if router.route(hostFromAddr(address)) {
+			return d.Tnet.DialContext(ctx, network, address)
+		}
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, network, address)
+	}
+}
+
 // RoutedDial returns a dialer that sends whitelisted hosts through the tunnel
 // and dials everything else directly. Used by the HTTP and SNI proxies, whose
 // dial callbacks receive the destination hostname intact.
 func (d VirtualTun) RoutedDial(router *DomainRouter) func(network, address string) (net.Conn, error) {
+	dial := d.RoutedDialContext(router)
 	return func(network, address string) (net.Conn, error) {
-		if router.route(hostFromAddr(address)) {
-			return d.Tnet.Dial(network, address)
-		}
-		return net.Dial(network, address)
+		return dial(context.Background(), network, address)
 	}
 }
 
@@ -195,8 +206,10 @@ func (d VirtualTun) routedSocks5Dial(router *DomainRouter) func(context.Context,
 	}
 }
 
-// SpawnRoutine spawns a socks5 server.
-func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
+// newServer builds the socks5 server. WithDial is used by both CONNECT and
+// UDP ASSOCIATE, while WithDialAndRequest lets CONNECT make its routing
+// decision using the original request FQDN.
+func (config *Socks5Config) newServer(vt *VirtualTun) *socks5.Server {
 	var authMethods []socks5.Authenticator
 	if username := config.Username; username != "" {
 		authMethods = append(authMethods, socks5.UserPassAuthenticator{
@@ -219,14 +232,22 @@ func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
 		)
 	} else {
 		// Split-routing path: keep the FQDN so we can decide per connection.
+		// WithDial covers UDP ASSOCIATE datagrams, whose destination is only
+		// known per datagram.
 		router := NewDomainRouter(config.TunnelDomains, config.LogDomains)
 		options = append(options,
+			socks5.WithDial(vt.RoutedDialContext(router)),
 			socks5.WithDialAndRequest(vt.routedSocks5Dial(router)),
 			socks5.WithResolver(passthroughResolver{}),
 		)
 	}
 
-	server := socks5.NewServer(options...)
+	return socks5.NewServer(options...)
+}
+
+// SpawnRoutine spawns a socks5 server.
+func (config *Socks5Config) SpawnRoutine(vt *VirtualTun) {
+	server := config.newServer(vt)
 
 	if err := server.ListenAndServe("tcp", config.BindAddress); err != nil {
 		log.Fatal(err)

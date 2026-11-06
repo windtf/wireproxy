@@ -1,6 +1,9 @@
 package wireproxy
 
 import (
+	"context"
+	"io"
+	"net"
 	"regexp"
 	"testing"
 )
@@ -131,6 +134,42 @@ TunnelDomains = ^(unclosed`
 
 	if _, err := parseHTTPConfig(section); err == nil {
 		t.Fatal("expected invalid regex to be rejected")
+	}
+}
+
+func TestRoutedDialContextDialsDirect(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte("direct"))
+	}()
+
+	// A zero VirtualTun is enough: a non-matching destination must never touch
+	// netstack. If this regresses, the nil Tnet will panic.
+	vt := VirtualTun{}
+	router := NewDomainRouter(mustCompile(t, `^tunnel\.invalid$`), false)
+
+	conn, err := vt.RoutedDialContext(router)(context.Background(), "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	got := make([]byte, len("direct"))
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "direct" {
+		t.Fatalf("got %q, want %q", got, "direct")
 	}
 }
 
