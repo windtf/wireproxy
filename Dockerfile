@@ -7,7 +7,7 @@ COPY . .
 RUN make
 
 # Now copy it into our base image.
-FROM gcr.io/distroless/static-debian11:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /usr/src/wireproxy/wireproxy /usr/bin/wireproxy
 
 VOLUME [ "/etc/wireproxy"]
