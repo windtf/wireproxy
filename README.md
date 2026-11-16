@@ -29,13 +29,14 @@ of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
 # Feature
 
 - TCP static routing for client and server
-- SOCKS5/HTTP proxy (currently only CONNECT is supported)
+- UDP static routing for client and server
+- SOCKS5 proxy with TCP `CONNECT` and UDP `ASSOCIATE`
+- HTTP proxy (currently only CONNECT is supported)
 - Transparent TLS ([SNI](https://en.wikipedia.org/wiki/Server_Name_Indication)) proxy
 
-# TODO
-
-- UDP Support in SOCKS5
-- UDP static routing
+SOCKS5 UDP ASSOCIATE is intended for clients that support relaying UDP over
+SOCKS5 (for example transparent proxy clients). Most browsers do not use UDP
+ASSOCIATE, even when configured with a SOCKS5 proxy.
 
 # Usage
 
@@ -128,6 +129,7 @@ Target = localhost:25545
 Target = ssh.myserver.net:22
 
 # Socks5 creates a socks5 proxy on your LAN, and all traffic would be routed via wireguard.
+# Both TCP CONNECT and UDP ASSOCIATE are supported.
 [Socks5]
 BindAddress = 127.0.0.1:25344
 
@@ -141,6 +143,8 @@ BindAddress = 127.0.0.1:25344
 # whose destination host matches one of the patterns are routed through wireguard;
 # every other connection is dialed directly over your normal network. When
 # TunnelDomains is unset, all traffic is routed through wireguard (default).
+# The same rules apply to UDP ASSOCIATE datagrams, using each datagram's
+# destination host.
 # Each TunnelDomains line is a single, full Go regular expression (RE2). Repeat
 # the key for multiple patterns; do NOT comma-separate (so quantifiers like {2,4}
 # keep working). Matching is case-insensitive and a trailing dot is ignored.
@@ -229,9 +233,23 @@ Target = service-two.servicenet:5001
 ListenPort = 5080
 Target = service-three.servicenet:80
 
+# UDPProxyTunnel is the UDP client tunnel: UDP traffic sent to BindAddress is
+# forwarded through WireGuard to Target.
+# Flow:
+# <an app on your LAN> --> localhost:53 --(wireguard)--> 1.1.1.1:53
 [UDPProxyTunnel]
 BindAddress = 127.0.0.1:53
 Target = 1.1.1.1:53
+InactivityTimeout = 30 # If its set to 0, it will never timeout
+
+# UDPServerTunnel is the UDP server tunnel: UDP traffic arriving on the
+# WireGuard side on ListenPort is forwarded to a target on your local network.
+# The listener binds to every address in [Interface] Address.
+# Flow:
+# <an app on your wireguard network> --(wireguard)--> ListenPort --> localhost:19132
+[UDPServerTunnel]
+ListenPort = 19132
+Target = 127.0.0.1:19132
 InactivityTimeout = 30 # If its set to 0, it will never timeout
 
 [Resolve]

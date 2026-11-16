@@ -124,3 +124,63 @@ InactivityTimeout = -1`
 		t.Fatal("expected negative InactivityTimeout to be rejected")
 	}
 }
+
+func TestParseUDPServerTunnelConfig(t *testing.T) {
+	const config = `
+[UDPServerTunnel]
+ListenPort = 19132
+Target = 127.0.0.1:19132
+InactivityTimeout = 30`
+
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spawner, err := parseUDPServerTunnelConfig(iniData.Section("UDPServerTunnel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, ok := spawner.(*UDPServerTunnelConfig)
+	if !ok {
+		t.Fatalf("unexpected spawner type %T", spawner)
+	}
+	if cfg.ListenPort != 19132 {
+		t.Fatalf("ListenPort = %d, want 19132", cfg.ListenPort)
+	}
+	if cfg.Target != "127.0.0.1:19132" {
+		t.Fatalf("Target = %q, want 127.0.0.1:19132", cfg.Target)
+	}
+	if cfg.InactivityTimeout != 30 {
+		t.Fatalf("InactivityTimeout = %d, want 30", cfg.InactivityTimeout)
+	}
+}
+
+func TestParseUDPServerTunnelRejectsInvalidConfig(t *testing.T) {
+	cases := map[string]string{
+		"missing listen port": `
+[UDPServerTunnel]
+Target = 127.0.0.1:19132`,
+		"missing target": `
+[UDPServerTunnel]
+ListenPort = 19132`,
+		"negative timeout": `
+[UDPServerTunnel]
+ListenPort = 19132
+Target = 127.0.0.1:19132
+InactivityTimeout = -1`,
+	}
+
+	for name, config := range cases {
+		t.Run(name, func(t *testing.T) {
+			iniData, err := loadIniConfig(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseUDPServerTunnelConfig(iniData.Section("UDPServerTunnel")); err == nil {
+				t.Fatal("expected invalid config to be rejected")
+			}
+		})
+	}
+}

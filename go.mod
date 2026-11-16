@@ -7,7 +7,7 @@ require (
 	github.com/akamensky/argparse v1.4.0
 	github.com/go-ini/ini v1.67.0
 	github.com/landlock-lsm/go-landlock v0.6.0
-	github.com/things-go/go-socks5 v0.1.3
+	github.com/things-go/go-socks5 v0.1.4
 	golang.org/x/net v0.55.0
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
 	suah.dev/protect v1.2.3
