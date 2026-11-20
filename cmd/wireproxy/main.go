@@ -311,7 +311,7 @@ func main() {
 		go func() {
 			err := http.ListenAndServe(*info, tun)
 			if err != nil {
-				panic(err)
+				log.Fatal(err)
 			}
 		}()
 	}

@@ -224,3 +224,19 @@ func TestUnreadableConfigExitsOne(t *testing.T) {
 		t.Error("expected an error message on stderr")
 	}
 }
+
+func TestInfoListenFailureExitsOne(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+
+	code, _, stderr := runMain(t, "-c "+writeTestConfig(t)+" -i "+l.Addr().String())
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1\n%s", code, stderr)
+	}
+	if strings.Contains(stderr, "goroutine ") {
+		t.Errorf("stack trace printed: %s", stderr)
+	}
+}
