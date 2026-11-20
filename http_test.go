@@ -697,3 +697,54 @@ func TestHTTPServerPlainResponseIdleTimeout(t *testing.T) {
 		t.Fatalf("proxy did not cut off the stalled origin: %v", err)
 	}
 }
+
+func TestHTTPServerPlainResponseHeadersAndTrailers(t *testing.T) {
+	server := startRawOrigin(t, func(conn net.Conn) {
+		_, _ = http.ReadRequest(bufio.NewReader(conn))
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\n" +
+			"Transfer-Encoding: chunked\r\n" +
+			"Trailer: X-Sum\r\n" +
+			"Connection: keep-alive, X-Custom-Hop\r\n" +
+			"Keep-Alive: timeout=5\r\n" +
+			"Proxy-Authenticate: Basic\r\n" +
+			"X-Custom-Hop: 1\r\n" +
+			"X-Keep-Me: yes\r\n\r\n" +
+			"5\r\nhello\r\n0\r\nX-Sum: abc\r\n\r\n"))
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := clientConn.Write([]byte("GET http://a.test/ HTTP/1.1\r\nHost: a.test\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(clientConn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != "hello" {
+		t.Fatalf("body %q, %v", body, err)
+	}
+
+	for _, name := range []string{"Keep-Alive", "Proxy-Authenticate", "X-Custom-Hop"} {
+		if v := resp.Header.Get(name); v != "" {
+			t.Errorf("client saw %s=%q", name, v)
+		}
+	}
+	if resp.Header.Get("X-Keep-Me") != "yes" {
+		t.Errorf("end-to-end header dropped: %v", resp.Header)
+	}
+	if !resp.Close {
+		t.Errorf("expected Connection: close, headers %v", resp.Header)
+	}
+	if got := resp.Trailer.Get("X-Sum"); got != "abc" {
+		t.Errorf("trailer X-Sum = %q, want abc (trailer %v)", got, resp.Trailer)
+	}
+}

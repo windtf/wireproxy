@@ -218,6 +218,9 @@ func (s *HTTPServer) handle(req *http.Request, conn net.Conn, rd io.Reader) erro
 			continue
 		}
 
+		// The origin's connection management does not apply to the client
+		// connection, which is closed after this response.
+		removeHopByHopHeaders(resp.Header)
 		resp.Close = true
 		err = resp.Write(conn)
 		_ = resp.Body.Close()
