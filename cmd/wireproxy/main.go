@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
+	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 
 	"github.com/akamensky/argparse"
 	"github.com/windtf/wireproxy"
@@ -86,6 +87,13 @@ func tlsFilePaths(routines []wireproxy.RoutineSpawner) []string {
 	return paths
 }
 
+// files the Go resolver reads when it looks up a name on the host
+var resolverFiles = []string{
+	"/etc/resolv.conf",
+	"/etc/hosts",
+	"/etc/nsswitch.conf",
+}
+
 func lock(stage string, roFilles ...string) {
 	switch stage {
 	case "boot":
@@ -116,7 +124,6 @@ func lock(stage string, roFilles ...string) {
 		// so we can add the provided dynamic rules
 
 		rules := []landlock.Rule{
-			landlock.ROFiles("/etc/resolv.conf").IgnoreIfMissing(),
 			landlock.ROFiles("/dev/fd").IgnoreIfMissing(),
 			landlock.ROFiles("/dev/zero").IgnoreIfMissing(),
 			landlock.ROFiles("/dev/urandom").IgnoreIfMissing(),
@@ -134,6 +141,10 @@ func lock(stage string, roFilles ...string) {
 			landlock.RWFiles("/dev/null").IgnoreIfMissing(),
 			landlock.RWFiles("/dev/full").IgnoreIfMissing(),
 			landlock.RWFiles("/proc/self/fd").IgnoreIfMissing(),
+		}
+
+		for _, file := range resolverFiles {
+			rules = append(rules, landlock.ROFiles(file).IgnoreIfMissing())
 		}
 
 		if len(roFilles) > 0 {
@@ -163,16 +174,54 @@ func extractPort(addr string) uint16 {
 	return uint16(port)
 }
 
-func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
-	var rules []landlock.Rule
+// canDialDirect reports whether wireproxy may open TCP connections from the
+// host network namespace: split routing dials non-tunnel hosts directly, and
+// without a DNS setting names are resolved by the system resolver.
+func canDialDirect(sections []wireproxy.RoutineSpawner, systemDNS bool) bool {
+	if systemDNS {
+		return true
+	}
+	for _, section := range sections {
+		switch section := section.(type) {
+		case *wireproxy.HTTPConfig:
+			if len(section.TunnelDomains) > 0 {
+				return true
+			}
+		case *wireproxy.Socks5Config:
+			if len(section.TunnelDomains) > 0 {
+				return true
+			}
+		case *wireproxy.SNIConfig:
+			if len(section.TunnelDomains) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// networkRules chooses the Landlock network rules. When connections may go out
+// directly the destinations are not known up front, so only bind is restricted
+// (restrictConnect is false). Otherwise connect is restricted too, to the
+// TCP server tunnel targets and to port 53 for the resolver's TCP fallback
+// (used when the endpoint is re-resolved with the system resolver).
+func networkRules(sections []wireproxy.RoutineSpawner, infoAddr *string, systemDNS bool) (rules []landlock.Rule, restrictConnect bool) {
+	restrictConnect = !canDialDirect(sections, systemDNS)
+
 	if infoAddr != nil && *infoAddr != "" {
 		rules = append(rules, landlock.BindTCP(extractPort(*infoAddr)))
+	}
+
+	if restrictConnect {
+		rules = append(rules, landlock.ConnectTCP(53))
 	}
 
 	for _, section := range sections {
 		switch section := section.(type) {
 		case *wireproxy.TCPServerTunnelConfig:
-			rules = append(rules, landlock.ConnectTCP(extractPort(section.Target)))
+			if restrictConnect {
+				rules = append(rules, landlock.ConnectTCP(extractPort(section.Target)))
+			}
 		case *wireproxy.HTTPConfig:
 			rules = append(rules, landlock.BindTCP(extractPort(section.BindAddress)))
 		case *wireproxy.TCPClientTunnelConfig:
@@ -184,7 +233,18 @@ func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
 		}
 	}
 
-	panicIfError(landlock.V4.BestEffort().RestrictNet(rules...))
+	return rules, restrictConnect
+}
+
+func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string, systemDNS bool) {
+	rules, restrictConnect := networkRules(sections, infoAddr, systemDNS)
+
+	config := landlock.V4
+	if !restrictConnect {
+		config = landlock.MustConfig(landlock.AccessNetSet(llsyscall.AccessNetBindTCP))
+	}
+
+	panicIfError(config.BestEffort().RestrictNet(rules...))
 }
 
 func main() {
@@ -250,7 +310,7 @@ func main() {
 		return
 	}
 
-	lockNetwork(conf.Routines, info)
+	lockNetwork(conf.Routines, info, len(conf.Device.DNS) == 0)
 
 	if isDaemonProcess {
 		os.Stdout, _ = os.Open(os.DevNull)
