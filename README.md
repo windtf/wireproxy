@@ -29,7 +29,7 @@ of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
 # Feature
 
 - TCP static routing for client and server
-- SOCKS5/HTTP proxy (currently only CONNECT is supported)
+- SOCKS5/HTTP proxy (SOCKS5 supports CONNECT only; the HTTP proxy supports CONNECT and plain HTTP requests of any method, each on its own connection to the origin, and tunnels protocol upgrades such as WebSocket)
 - Transparent TLS ([SNI](https://en.wikipedia.org/wiki/Server_Name_Indication)) proxy
 
 # TODO

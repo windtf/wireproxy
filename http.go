@@ -11,9 +11,14 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const proxyAuthHeaderKey = "Proxy-Authorization"
+
+// httpReadRequestTimeout bounds how long a client may take to send its request
+// line and headers.
+var httpReadRequestTimeout = 30 * time.Second
 
 type HTTPServer struct {
 	config *HTTPConfig
@@ -50,6 +55,37 @@ func (s *HTTPServer) authenticate(req *http.Request) (int, error) {
 	return http.StatusUnauthorized, fmt.Errorf("username and password not matching")
 }
 
+// hopByHopHeaders are the headers that apply to a single transport-level
+// connection (RFC 7230 section 6.1) plus the proxy-specific ones, and must not
+// be forwarded to the origin.
+var hopByHopHeaders = []string{
+	"Connection",
+	"Proxy-Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	proxyAuthHeaderKey,
+	"Te",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+}
+
+// removeHopByHopHeaders deletes the hop-by-hop headers, including any header
+// named in a Connection header, so that proxy credentials and connection
+// management do not leak to the origin.
+func removeHopByHopHeaders(h http.Header) {
+	for _, v := range h.Values("Connection") {
+		for _, name := range strings.Split(v, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				h.Del(name)
+			}
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		h.Del(name)
+	}
+}
+
 func (s *HTTPServer) handleConn(req *http.Request, conn net.Conn) (peer net.Conn, err error) {
 	addr := req.Host
 	if !strings.Contains(addr, ":") {
@@ -71,26 +107,125 @@ func (s *HTTPServer) handleConn(req *http.Request, conn net.Conn) (peer net.Conn
 	return
 }
 
-func (s *HTTPServer) handle(req *http.Request) (peer net.Conn, err error) {
+// isUpgrade returns the requested protocol if the client asked for a protocol
+// upgrade (e.g. WebSocket) with both Connection: upgrade and an Upgrade header.
+func isUpgrade(h http.Header) string {
+	for _, v := range h.Values("Connection") {
+		for _, token := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return h.Get("Upgrade")
+			}
+		}
+	}
+	return ""
+}
+
+// writeInterim writes a 1xx response (100 Continue, 101 Switching Protocols)
+// to the client.
+func writeInterim(w io.Writer, resp *http.Response) error {
+	if _, err := fmt.Fprintf(w, "HTTP/1.1 %s\r\n", resp.Status); err != nil {
+		return err
+	}
+	if err := resp.Header.Write(w); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "\r\n")
+	return err
+}
+
+// handle forwards one plain-HTTP request to the origin on its own connection
+// and relays the response. rd holds any bytes of the client connection that
+// were read ahead of the request.
+func (s *HTTPServer) handle(req *http.Request, conn net.Conn, rd io.Reader) error {
 	addr := req.Host
 	if !strings.Contains(addr, ":") {
 		port := "80"
 		addr = net.JoinHostPort(addr, port)
 	}
 
-	peer, err = s.dial("tcp", addr)
+	peer, err := s.dial("tcp", addr)
 	if err != nil {
-		return peer, fmt.Errorf("tun tcp dial failed: %w", err)
+		return fmt.Errorf("tun tcp dial failed: %w", err)
+	}
+	defer func() { _ = peer.Close() }()
+
+	upgrade := isUpgrade(req.Header)
+	removeHopByHopHeaders(req.Header)
+	if upgrade != "" {
+		// Keep the upgrade handshake (e.g. WebSocket) so it can be tunnelled.
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", upgrade)
+	} else {
+		// One origin connection per request: ask the origin to close after
+		// the response.
+		req.Close = true
 	}
 
-	err = req.Write(peer)
-	if err != nil {
-		_ = peer.Close()
-		peer = nil
-		return peer, fmt.Errorf("conn write failed: %w", err)
-	}
+	// An origin that goes silent must not hold the connection forever.
+	d := proxyIdleTimeout
+	idle := time.AfterFunc(d, func() { _ = peer.Close() })
+	defer idle.Stop()
+	oc := idleConn{Conn: peer, reset: func() { idle.Reset(d) }}
 
-	return
+	// Write the request while relaying the response, so that an interim
+	// response (100 Continue) reaches a client that is waiting for it before it
+	// sends the body.
+	written := make(chan error, 1)
+	go func() {
+		err := req.Write(oc)
+		if err != nil {
+			_ = peer.Close()
+		}
+		written <- err
+	}()
+
+	br := bufio.NewReader(oc)
+	for {
+		resp, err := http.ReadResponse(br, req)
+		if err != nil {
+			// Do not wait for the writer: it may be blocked reading a
+			// request body the client has not sent. serve closes the client
+			// connection, which unblocks it.
+			select {
+			case werr := <-written:
+				if werr != nil {
+					return fmt.Errorf("conn write failed: %w", werr)
+				}
+			default:
+			}
+			return fmt.Errorf("read response failed: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusSwitchingProtocols && upgrade != "" {
+			if err := writeInterim(conn, resp); err != nil {
+				return err
+			}
+			if err := <-written; err != nil {
+				return fmt.Errorf("conn write failed: %w", err)
+			}
+			idle.Stop()
+			// Tunnel from here on. The origin's reads are no longer
+			// idle-tracked, and br may hold bytes sent right after the 101.
+			buffered, _ := br.Peek(br.Buffered())
+			ahead := append([]byte(nil), buffered...)
+			proxyCopy(readerConn{Conn: conn, r: rd}, readerConn{Conn: peer, r: io.MultiReader(bytes.NewReader(ahead), peer)})
+			return nil
+		}
+		if resp.StatusCode >= 100 && resp.StatusCode < 200 && resp.StatusCode != http.StatusSwitchingProtocols {
+			if err := writeInterim(conn, resp); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// The origin's connection management does not apply to the client
+		// connection, which is closed after this response.
+		removeHopByHopHeaders(resp.Header)
+		resp.Close = true
+		err = resp.Write(conn)
+		_ = resp.Body.Close()
+		return err
+	}
 }
 
 func (s *HTTPServer) serve(conn net.Conn) {
@@ -100,10 +235,23 @@ func (s *HTTPServer) serve(conn net.Conn) {
 			_ = conn.Close()
 		}
 	}()
+	if err := conn.SetReadDeadline(time.Now().Add(httpReadRequestTimeout)); err != nil {
+		log.Printf("set read deadline failed: %s\n", err)
+		return
+	}
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {
-		log.Printf("read request failed: %s\n", err)
+		// io.EOF means the client closed before sending any byte (a port
+		// probe or health check), which is not worth a log line. A request
+		// cut short is io.ErrUnexpectedEOF and is still logged.
+		if err != io.EOF {
+			log.Printf("read request failed: %s\n", err)
+		}
+		return
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		log.Printf("clear read deadline failed: %s\n", err)
 		return
 	}
 
@@ -118,17 +266,14 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		return
 	}
 
-	var peer net.Conn
-	switch req.Method {
-	case http.MethodConnect:
-		peer, err = s.handleConn(req, conn)
-	case http.MethodGet:
-		peer, err = s.handle(req)
-	default:
-		_ = responseWith(req, http.StatusMethodNotAllowed).Write(conn)
-		log.Printf("unsupported protocol: %s\n", req.Method)
+	if req.Method != http.MethodConnect {
+		if err := s.handle(req, conn, rd); err != nil {
+			log.Printf("proxy request failed: %s\n", err)
+		}
 		return
 	}
+
+	peer, err := s.handleConn(req, conn)
 	if err != nil {
 		if peer != nil {
 			_ = peer.Close()
@@ -143,19 +288,8 @@ func (s *HTTPServer) serve(conn net.Conn) {
 
 	handled = true
 
-	go func() {
-		defer func() { _ = conn.Close() }()
-		defer func() { _ = peer.Close() }()
-
-		_, _ = io.Copy(conn, peer)
-	}()
-
-	go func() {
-		defer func() { _ = conn.Close() }()
-		defer func() { _ = peer.Close() }()
-
-		_, _ = io.Copy(peer, conn)
-	}()
+	// rd may already hold bytes the client sent after the request.
+	proxyCopy(readerConn{Conn: conn, r: rd}, peer)
 }
 
 func (s *HTTPServer) listen(network, addr string) (net.Listener, error) {
