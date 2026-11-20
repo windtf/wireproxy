@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 const copyBufferSize = 32 * 1024
@@ -36,38 +38,84 @@ func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
 	return io.CopyBuffer(writerOnly{dst}, readerOnly{src}, *bp)
 }
 
+// proxyIdleTimeout bounds how long a half-closed proxyCopy, or a plain-HTTP
+// response relay, waits for more data from the other side.
+var proxyIdleTimeout = 2 * time.Minute
+
+// activityReader calls onRead after every read that returned data.
+type activityReader struct {
+	io.Reader
+	onRead func()
+}
+
+func (r activityReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		r.onRead()
+	}
+	return n, err
+}
+
+type proxyState struct {
+	a, b io.ReadWriteCloser
+	idle *time.Timer
+	d    time.Duration
+	// closing is set before we close the connections ourselves, so errors that
+	// our own Close causes in the other direction are not logged.
+	closing    atomic.Bool
+	halfClosed atomic.Bool
+}
+
+func (s *proxyState) closeBoth() {
+	s.closing.Store(true)
+	_ = s.a.Close()
+	_ = s.b.Close()
+}
+
 // copyHalf copies src to dst. When src reaches EOF it shuts down the write side
-// of dst so the other end sees EOF while the reverse direction keeps going.
-// If that is not possible, or the copy failed, both connections are closed.
-func copyHalf(dst, src io.ReadWriteCloser) {
-	_, err := copyPooled(dst, src)
-	if err != nil && !errors.Is(err, net.ErrClosed) {
+// of dst so the other end sees EOF while the reverse direction keeps going,
+// bounded by the idle timeout. If that is not possible, or the copy failed,
+// both connections are closed.
+func (s *proxyState) copyHalf(dst, src io.ReadWriteCloser) {
+	_, err := copyPooled(dst, activityReader{src, func() {
+		if s.halfClosed.Load() {
+			s.idle.Reset(s.d)
+		}
+	}})
+	if err != nil && !s.closing.Load() && !errors.Is(err, net.ErrClosed) {
 		errorLogger.Printf("Cannot forward traffic: %s\n", err.Error())
 	}
 	if err == nil {
 		if cw, ok := dst.(closeWriter); ok && cw.CloseWrite() == nil {
+			s.halfClosed.Store(true)
+			s.idle.Reset(s.d)
 			return
 		}
 	}
-	_ = dst.Close()
-	_ = src.Close()
+	s.closeBoth()
 }
 
 // proxyCopy copies data in both directions between a and b, honouring
-// half-close, and closes both once both directions are finished (or one fails).
-// It blocks until then.
+// half-close, and closes both once both directions are finished (or one fails,
+// or the remaining direction is idle for proxyIdleTimeout after the other
+// finished). It blocks until then.
 func proxyCopy(a, b io.ReadWriteCloser) {
+	s := &proxyState{a: a, b: b, d: proxyIdleTimeout}
+	s.idle = time.AfterFunc(s.d, s.closeBoth)
+	s.idle.Stop()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		copyHalf(a, b)
+		s.copyHalf(a, b)
 	}()
 	go func() {
 		defer wg.Done()
-		copyHalf(b, a)
+		s.copyHalf(b, a)
 	}()
 	wg.Wait()
+	s.idle.Stop()
 	_ = a.Close()
 	_ = b.Close()
 }
