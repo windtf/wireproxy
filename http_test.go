@@ -2,11 +2,14 @@ package wireproxy
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -322,6 +325,49 @@ func TestHTTPServerReadRequestTimeout(t *testing.T) {
 	_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := clientConn.Read(make([]byte, 1)); err != io.EOF {
 		t.Fatalf("expected the proxy to close the idle connection, got %v", err)
+	}
+}
+
+// A client that connects and closes without sending anything (a port probe or
+// load balancer health check) is not an error, but a truncated request is.
+func TestHTTPServerReadRequestLogging(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	// serveAfter has a client write write (if not empty) and close, then
+	// returns what serve logged for that connection.
+	serveAfter := func(write string) string {
+		logs.Reset()
+		client, err := net.Dial("tcp", listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if write != "" {
+			if _, err := client.Write([]byte(write)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_ = client.Close()
+		server, err := listener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		(&HTTPServer{}).serve(server)
+		return logs.String()
+	}
+
+	if got := serveAfter(""); got != "" {
+		t.Errorf("empty connection logged %q, want nothing", got)
+	}
+	if got := serveAfter("GET http://example.test/ HT"); !strings.Contains(got, "read request failed") {
+		t.Errorf("truncated request logged %q, want a read request failure", got)
 	}
 }
 

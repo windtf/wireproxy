@@ -242,7 +242,12 @@ func (s *HTTPServer) serve(conn net.Conn) {
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {
-		log.Printf("read request failed: %s\n", err)
+		// io.EOF means the client closed before sending any byte (a port
+		// probe or health check), which is not worth a log line. A request
+		// cut short is io.ErrUnexpectedEOF and is still logged.
+		if err != io.EOF {
+			log.Printf("read request failed: %s\n", err)
+		}
 		return
 	}
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
