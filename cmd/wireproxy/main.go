@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 
@@ -213,6 +214,7 @@ func main() {
 	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode"})
 	daemon := parser.Flag("d", "daemon", &argparse.Options{Help: "Make wireproxy run in background"})
 	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status"})
+	healthcheck := parser.String("H", "healthcheck", &argparse.Options{Help: "Request /readyz from the health endpoint at the given address and port (see --info), exit 0 if healthy and 1 otherwise"})
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
 	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
 
@@ -224,6 +226,14 @@ func main() {
 
 	if *printVerison {
 		fmt.Printf("wireproxy, version %s\n", version)
+		return
+	}
+
+	if *healthcheck != "" {
+		if err := wireproxy.Healthcheck(*healthcheck, 3*time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 

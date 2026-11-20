@@ -33,6 +33,9 @@ type DeviceConfig struct {
 	ListenPort         *int
 	CheckAlive         []netip.Addr
 	CheckAliveInterval int
+	// MaxHandshakeAge is the age, in seconds, of the last handshake of a peer
+	// after which /readyz reports unavailable. 0 disables the check.
+	MaxHandshakeAge int
 }
 
 type UDPProxyTunnelConfig struct {
@@ -324,6 +327,18 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 		}
 
 		device.CheckAliveInterval = value
+	}
+
+	if sectionKey, err := section.GetKey("MaxHandshakeAge"); err == nil {
+		value, err := sectionKey.Int()
+		if err != nil {
+			return err
+		}
+		if value < 0 {
+			return errors.New("MaxHandshakeAge should not be negative")
+		}
+
+		device.MaxHandshakeAge = value
 	}
 
 	return nil

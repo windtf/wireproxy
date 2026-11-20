@@ -420,13 +420,6 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		d.PingRecordLock.Unlock()
 
-		body, err := json.Marshal(records)
-		if err != nil {
-			errorLogger.Printf("Failed to get device metrics: %s\n", err.Error())
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
 		status := http.StatusOK
 		for _, record := range records {
 			lastPong := time.Unix(int64(record), 0)
@@ -435,6 +428,29 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				status = http.StatusServiceUnavailable
 				break
 			}
+		}
+
+		if d.Conf.MaxHandshakeAge > 0 {
+			get, err := d.Dev.IpcGet()
+			if err != nil {
+				errorLogger.Printf("Failed to get device metrics: %s\n", err.Error())
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			handshakes, stale := handshakeRecords(get, time.Duration(d.Conf.MaxHandshakeAge)*time.Second, time.Now())
+			for addr, record := range handshakes {
+				records[addr] = record
+			}
+			if stale {
+				status = http.StatusServiceUnavailable
+			}
+		}
+
+		body, err := json.Marshal(records)
+		if err != nil {
+			errorLogger.Printf("Failed to get device metrics: %s\n", err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 
 		w.WriteHeader(status)
