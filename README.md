@@ -45,22 +45,25 @@ of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
 
 ```bash
 usage: wireproxy [-h|--help] [-c|--config "<value>"] [-s|--silent]
-                 [-d|--daemon] [-i|--info "<value>"] [-v|--version]
-                 [-n|--configtest]
+                 [-d|--daemon] [-i|--info "<value>"] [-H|--healthcheck
+                 "<value>"] [-v|--version] [-n|--configtest]
 
                  Userspace wireguard client for proxying
 
 Arguments:
 
-  -h  --help        Print help information
-  -c  --config      Path of configuration file
-                    Default paths: /etc/wireproxy/wireproxy.conf, $HOME/.config/wireproxy.conf
-  -s  --silent      Silent mode
-  -d  --daemon      Make wireproxy run in background
-  -i  --info        Specify the address and port for exposing health status
-  -v  --version     Print version
-  -n  --configtest  Configtest mode. Only check the configuration file for
-                    validity.
+  -h  --help         Print help information
+  -c  --config       Path of configuration file
+                     Default paths: /etc/wireproxy/wireproxy.conf, $HOME/.config/wireproxy.conf
+  -s  --silent       Silent mode
+  -d  --daemon       Make wireproxy run in background
+  -i  --info         Specify the address and port for exposing health status
+  -H  --healthcheck  Request /readyz from the health endpoint at the given
+                     address and port (see --info), exit 0 if healthy and 1
+                     otherwise
+  -v  --version      Print version
+  -n  --configtest   Configtest mode. Only check the configuration file for
+                     validity.
 ```
 
 # Build instruction
@@ -91,6 +94,7 @@ Instructions for using wireproxy with Firefox container tabs and auto-start on M
 [Interface]
 Address = 10.200.200.2/32 # The subnet should be /32 and /128 for IPv4 and v6 respectively
 # MTU = 1420 (optional)
+# MaxHandshakeAge = 180 (optional, see "Health endpoint" below)
 PrivateKey = uCTIK+56CPyCvwJxmU5dBfuyJvPuSXAq1FzHdnIxe1Q=
 # PrivateKey = $MY_WIREGUARD_PRIVATE_KEY # Alternatively, reference environment variables
 DNS = 10.200.200.1
@@ -320,3 +324,48 @@ CheckAlive = 1.1.1.1
 If nothing is set for `CheckAlive`, an empty JSON object with 200 will be the response.
 
 The peer which the ICMP ping packet is routed to depends on the `AllowedIPs` set for each peers.
+
+## MaxHandshakeAge
+
+`MaxHandshakeAge` (`[Interface]`, in seconds, disabled by default) makes `/readyz` also
+respond with a 503 if the last handshake of any peer is older than that many seconds, or
+if a peer has never completed a handshake. This works without `CheckAlive`. The last
+handshake time (unix seconds, `0` if none) of each peer is added to the response under
+`handshake:<public key>`. Peers with no `Endpoint` in the config only answer handshakes,
+so they are not checked: they are listed with a `handshake_skipped:<public key>` entry of
+`1` and never make `/readyz` fail, even if they connected once and have a learned endpoint:
+
+```ini
+[Interface]
+PrivateKey = censored
+Address = 10.2.0.2/32
+MaxHandshakeAge = 180
+```
+
+```text
+< HTTP/1.1 503 Service Unavailable
+<
+{"handshake:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX=":0}
+```
+
+Note that wireguard only handshakes while there is traffic, so set `PersistentKeepalive`
+on peers that may be idle for longer than `MaxHandshakeAge`.
+
+## Health check in a container
+
+`--healthcheck/-H <address>` requests `/readyz` from the given address (the same value as
+`--info`) and exits with 0 if the response is a 200, otherwise with 1. It does not read a
+configuration file. As the container image has no shell, `curl` or `wget`, this is how to
+use `/readyz` as a Docker health check:
+
+```dockerfile
+CMD [ "--config", "/etc/wireproxy/config", "--info", "127.0.0.1:9080" ]
+HEALTHCHECK CMD [ "/usr/bin/wireproxy", "--healthcheck", "127.0.0.1:9080" ]
+```
+
+or with Compose:
+
+```yaml
+healthcheck:
+  test: ["CMD", "/usr/bin/wireproxy", "--healthcheck", "127.0.0.1:9080"]
+```
