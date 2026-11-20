@@ -205,7 +205,7 @@ func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
 
 func main() {
 	s := make(chan os.Signal, 1)
-	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT)
+	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {

@@ -3,10 +3,15 @@ package main
 import (
 	"bytes"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/windtf/wireproxy"
 	"golang.zx2c4.com/wireguard/device"
@@ -75,6 +80,72 @@ func TestUsageErrorExitsNonZero(t *testing.T) {
 		if strings.Contains(stdout, "usage: wireproxy") {
 			t.Errorf("%q: usage printed to stdout: %q", args, stdout)
 		}
+	}
+}
+
+func TestSIGTERMShutsDownCleanly(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 127.0.0.1:51820
+`
+	path := filepath.Join(t.TempDir(), "wireproxy.conf")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The health endpoint comes up after the signal handler is installed, so
+	// once it answers the child is ready for SIGTERM.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperMain$")
+	cmd.Env = append(os.Environ(), "WIREPROXY_TEST_ARGS=-s -c "+path+" -i "+addr)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := http.Get("http://" + addr + "/readyz")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("child never became ready: %v\n%s", err, stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("child did not exit cleanly on SIGTERM: %v\n%s", err, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("child did not exit after SIGTERM")
 	}
 }
 
