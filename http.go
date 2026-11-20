@@ -50,6 +50,37 @@ func (s *HTTPServer) authenticate(req *http.Request) (int, error) {
 	return http.StatusUnauthorized, fmt.Errorf("username and password not matching")
 }
 
+// hopByHopHeaders are the headers that apply to a single transport-level
+// connection (RFC 7230 section 6.1) plus the proxy-specific ones, and must not
+// be forwarded to the origin.
+var hopByHopHeaders = []string{
+	"Connection",
+	"Proxy-Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	proxyAuthHeaderKey,
+	"Te",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+}
+
+// removeHopByHopHeaders deletes the hop-by-hop headers, including any header
+// named in a Connection header, so that proxy credentials and connection
+// management do not leak to the origin.
+func removeHopByHopHeaders(h http.Header) {
+	for _, v := range h.Values("Connection") {
+		for _, name := range strings.Split(v, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				h.Del(name)
+			}
+		}
+	}
+	for _, name := range hopByHopHeaders {
+		h.Del(name)
+	}
+}
+
 func (s *HTTPServer) handleConn(req *http.Request, conn net.Conn) (peer net.Conn, err error) {
 	addr := req.Host
 	if !strings.Contains(addr, ":") {
@@ -82,6 +113,8 @@ func (s *HTTPServer) handle(req *http.Request) (peer net.Conn, err error) {
 	if err != nil {
 		return peer, fmt.Errorf("tun tcp dial failed: %w", err)
 	}
+
+	removeHopByHopHeaders(req.Header)
 
 	err = req.Write(peer)
 	if err != nil {
