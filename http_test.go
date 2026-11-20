@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -361,5 +363,101 @@ func TestHTTPServerReadDeadlineClearedForTunnel(t *testing.T) {
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(rd, buf); err != nil || string(buf) != "ping" {
 		t.Fatalf("tunnel closed by the request read deadline: %q, %v", buf, err)
+	}
+}
+
+func TestHTTPServerForwardsNonGetMethods(t *testing.T) {
+	type seen struct {
+		method, body string
+		close        bool
+	}
+	got := make(chan seen, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got <- seen{r.Method, string(body), r.Close}
+		_, _ = w.Write([]byte("done"))
+	}))
+	defer ts.Close()
+
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, ts.Listener.Addr().String())
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodHead} {
+		clientConn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+		req, err := http.NewRequest(method, "http://"+ts.Listener.Addr().String()+"/x", strings.NewReader("payload"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := req.Write(clientConn); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(clientConn), req)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status %d", method, resp.StatusCode)
+		}
+		_ = resp.Body.Close()
+		_ = clientConn.Close()
+
+		select {
+		case s := <-got:
+			if s.method != method || s.body != "payload" || !s.close {
+				t.Fatalf("%s: origin saw %+v", method, s)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: origin did not receive the request", method)
+		}
+	}
+}
+
+// A keep-alive follow-up for another host must not be piped to the first origin.
+func TestHTTPServerPlainRequestUsesOneOriginConnection(t *testing.T) {
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("first"))
+	}))
+	defer ts.Close()
+
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, ts.Listener.Addr().String())
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	two := "GET http://a.test/ HTTP/1.1\r\nHost: a.test\r\n\r\n" +
+		"GET http://b.test/ HTTP/1.1\r\nHost: b.test\r\n\r\n"
+	if _, err := clientConn.Write([]byte(two)); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := io.ReadAll(clientConn)
+	if err != nil {
+		t.Fatalf("expected the proxy to close the client connection after the response: %v", err)
+	}
+	if n := strings.Count(string(all), "HTTP/1.1 200"); n != 1 {
+		t.Fatalf("got %d responses, want 1: %q", n, all)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Fatalf("origin saw %d requests, want 1", n)
 	}
 }

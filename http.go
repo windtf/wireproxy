@@ -119,6 +119,9 @@ func (s *HTTPServer) handle(req *http.Request) (peer net.Conn, err error) {
 	}
 
 	removeHopByHopHeaders(req.Header)
+	// One origin connection per request: ask the origin to close after the
+	// response.
+	req.Close = true
 
 	err = req.Write(peer)
 	if err != nil {
@@ -164,15 +167,10 @@ func (s *HTTPServer) serve(conn net.Conn) {
 	}
 
 	var peer net.Conn
-	switch req.Method {
-	case http.MethodConnect:
+	if req.Method == http.MethodConnect {
 		peer, err = s.handleConn(req, conn)
-	case http.MethodGet:
+	} else {
 		peer, err = s.handle(req)
-	default:
-		_ = responseWith(req, http.StatusMethodNotAllowed).Write(conn)
-		log.Printf("unsupported protocol: %s\n", req.Method)
-		return
 	}
 	if err != nil {
 		if peer != nil {
@@ -183,6 +181,15 @@ func (s *HTTPServer) serve(conn net.Conn) {
 	}
 	if peer == nil {
 		log.Println("dial proxy failed: peer nil")
+		return
+	}
+
+	if req.Method != http.MethodConnect {
+		// The origin connection was dialled for this request's host only, so
+		// relay just its response and close both ends: a follow-up request on
+		// the client's keep-alive connection must not reach this origin.
+		defer func() { _ = peer.Close() }()
+		_, _ = copyPooled(conn, peer)
 		return
 	}
 
