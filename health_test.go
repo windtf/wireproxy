@@ -1,10 +1,14 @@
 package wireproxy
 
 import (
+	"crypto/ecdh"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +135,94 @@ func TestReadyzMaxHandshakeAge(t *testing.T) {
 			t.Fatalf("got %d %q", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// TestReadyzFreshHandshake brings up two wireguard devices over loopback and
+// expects /readyz of the initiator to turn 200 once they have handshaked.
+func TestReadyzFreshHandshake(t *testing.T) {
+	keyHex := func(seed byte) (private, public string) {
+		raw := make([]byte, 32)
+		raw[1] = seed
+		key, err := ecdh.X25519().NewPrivateKey(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(raw), hex.EncodeToString(key.PublicKey().Bytes())
+	}
+	newDev := func() (*device.Device, *netstack.Net) {
+		tun, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil, 1420)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dev := device.NewDevice(tun, conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
+		t.Cleanup(dev.Close)
+		return dev, tnet
+	}
+
+	privA, pubA := keyHex(1)
+	privB, pubB := keyHex(2)
+
+	devB, _ := newDev()
+	if err := devB.IpcSet("private_key=" + privB + "\nlisten_port=0\npublic_key=" + pubA + "\nallowed_ip=0.0.0.0/0\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := devB.Up(); err != nil {
+		t.Fatal(err)
+	}
+	ipc, err := devB.IpcGet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var portB string
+	for _, line := range strings.Split(ipc, "\n") {
+		if v, ok := strings.CutPrefix(line, "listen_port="); ok {
+			portB = v
+		}
+	}
+	if _, err := strconv.Atoi(portB); err != nil {
+		t.Fatalf("no listen_port in %q", ipc)
+	}
+
+	devA, _ := newDev()
+	if err := devA.IpcSet("private_key=" + privA + "\nlisten_port=0\npublic_key=" + pubB +
+		"\nendpoint=127.0.0.1:" + portB + "\npersistent_keepalive_interval=1\nallowed_ip=0.0.0.0/0\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := devA.Up(); err != nil {
+		t.Fatal(err)
+	}
+
+	tun := VirtualTun{
+		Dev:            devA,
+		Conf:           &DeviceConfig{CheckAliveInterval: 5, MaxHandshakeAge: 120},
+		PingRecord:     make(map[string]uint64),
+		PingRecordLock: new(sync.Mutex),
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := httptest.NewRecorder()
+		tun.ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+		if rec.Code == http.StatusOK {
+			var body map[string]uint64
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body) != 1 {
+				t.Fatalf("unexpected body %q", rec.Body.String())
+			}
+			for _, sec := range body {
+				if sec == 0 {
+					t.Fatalf("200 with an empty handshake time: %q", rec.Body.String())
+				}
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no fresh handshake within 10s, last got %d %q", rec.Code, rec.Body.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func TestMaxHandshakeAgeConfig(t *testing.T) {
