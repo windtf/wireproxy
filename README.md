@@ -94,6 +94,8 @@ Address = 10.200.200.2/32 # The subnet should be /32 and /128 for IPv4 and v6 re
 PrivateKey = uCTIK+56CPyCvwJxmU5dBfuyJvPuSXAq1FzHdnIxe1Q=
 # PrivateKey = $MY_WIREGUARD_PRIVATE_KEY # Alternatively, reference environment variables
 DNS = 10.200.200.1
+# Without DNS, hostnames for tunnelled connections are resolved by the host's resolver,
+# outside the tunnel.
 
 [Peer]
 PublicKey = QP+A67Z2UBrMgvNIdHv8gPel5URWNLS4B3ZQ2hQIZlg=
