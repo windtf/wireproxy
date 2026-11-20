@@ -14,10 +14,12 @@ import (
 // handshakeRecords reports the last handshake time of every peer found in an
 // IpcGet response as unix seconds (0 if there has never been one), keyed by
 // "handshake:<base64 public key>". stale is true if any peer has no handshake
-// or one older than maxAge.
+// or one older than maxAge. Peers without an endpoint are ignored: they only
+// answer handshakes and have never connected, so none can be expected of them.
 func handshakeRecords(ipc string, maxAge time.Duration, now time.Time) (records map[string]uint64, stale bool) {
 	records = make(map[string]uint64)
 	var name string
+	endpoints := make(map[string]bool)
 	for _, line := range strings.Split(ipc, "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
@@ -31,6 +33,10 @@ func handshakeRecords(ipc string, maxAge time.Duration, now time.Time) (records 
 			}
 			name = "handshake:" + name
 			records[name] = 0
+		case "endpoint":
+			if name != "" {
+				endpoints[name] = true
+			}
 		case "last_handshake_time_sec":
 			if sec, err := strconv.ParseUint(value, 10, 63); err == nil && name != "" {
 				records[name] = sec
@@ -38,7 +44,11 @@ func handshakeRecords(ipc string, maxAge time.Duration, now time.Time) (records 
 		}
 	}
 
-	for _, record := range records {
+	for name, record := range records {
+		if !endpoints[name] {
+			delete(records, name)
+			continue
+		}
 		if record == 0 || now.Sub(time.Unix(int64(record), 0)) > maxAge {
 			stale = true
 		}

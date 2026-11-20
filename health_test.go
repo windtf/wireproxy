@@ -27,8 +27,8 @@ func TestHandshakeRecords(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	maxAge := 2 * time.Minute
 	ipc := func(a, b int64) string {
-		return fmt.Sprintf("private_key=aa\npublic_key=%s\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=0\n"+
-			"public_key=%s\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=0\n", handshakeHexA, a, handshakeHexB, b)
+		return fmt.Sprintf("private_key=aa\npublic_key=%s\nendpoint=192.0.2.1:51820\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=0\n"+
+			"public_key=%s\nendpoint=192.0.2.2:51820\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=0\n", handshakeHexA, a, handshakeHexB, b)
 	}
 
 	tests := []struct {
@@ -57,9 +57,27 @@ func TestHandshakeRecords(t *testing.T) {
 	if records, stale := handshakeRecords("private_key=aa\n", maxAge, now); stale || len(records) != 0 {
 		t.Fatalf("no peers should not be stale, got %v %v", stale, records)
 	}
+
+	t.Run("peer without an endpoint is ignored", func(t *testing.T) {
+		// B has no endpoint and never handshook; only A counts.
+		noEndpoint := fmt.Sprintf("private_key=aa\npublic_key=%s\nendpoint=192.0.2.1:51820\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=0\n"+
+			"public_key=%s\nlast_handshake_time_sec=0\nlast_handshake_time_nsec=0\n", handshakeHexA, now.Unix()-10, handshakeHexB)
+		records, stale := handshakeRecords(noEndpoint, maxAge, now)
+		if stale {
+			t.Fatal("a peer without an endpoint must not make the check stale")
+		}
+		if len(records) != 1 || records[handshakeKeyA] != uint64(now.Unix()-10) {
+			t.Fatalf("unexpected records: %v", records)
+		}
+	})
 }
 
 func newReadyzTun(t *testing.T, maxHandshakeAge int) VirtualTun {
+	t.Helper()
+	return newReadyzTunPeer(t, maxHandshakeAge, true)
+}
+
+func newReadyzTunPeer(t *testing.T, maxHandshakeAge int, withEndpoint bool) VirtualTun {
 	t.Helper()
 	tun, _, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil, 1420)
 	if err != nil {
@@ -69,7 +87,11 @@ func newReadyzTun(t *testing.T, maxHandshakeAge int) VirtualTun {
 	t.Cleanup(dev.Close)
 
 	// The device is not brought up, so no handshake can ever happen.
-	request := "private_key=" + handshakeHexB + "\npublic_key=" + handshakeHexA + "\n" + "allowed_ip=0.0.0.0/0\n"
+	request := "private_key=" + handshakeHexB + "\npublic_key=" + handshakeHexA + "\n"
+	if withEndpoint {
+		request += "endpoint=192.0.2.1:51820\n"
+	}
+	request += "allowed_ip=0.0.0.0/0\n"
 	if err := dev.IpcSet(request); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +121,14 @@ func TestReadyzMaxHandshakeAge(t *testing.T) {
 		}
 		if strings.TrimSpace(rec.Body.String()) != `{"`+handshakeKeyA+`":0}` {
 			t.Fatalf("unexpected body %q", rec.Body.String())
+		}
+	})
+
+	t.Run("peer without an endpoint is ignored", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		newReadyzTunPeer(t, 120, false).ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "{}" {
+			t.Fatalf("got %d %q", rec.Code, rec.Body.String())
 		}
 	})
 }

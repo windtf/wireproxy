@@ -331,7 +331,8 @@ The peer which the ICMP ping packet is routed to depends on the `AllowedIPs` set
 respond with a 503 if the last handshake of any peer is older than that many seconds, or
 if a peer has never completed a handshake. This works without `CheckAlive`. The last
 handshake time (unix seconds, `0` if none) of each peer is added to the response under
-`handshake:<public key>`:
+`handshake:<public key>`. Peers without an `Endpoint` are skipped, since they only answer
+handshakes:
 
 ```ini
 [Interface]
