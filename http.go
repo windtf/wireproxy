@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -176,20 +175,8 @@ func (s *HTTPServer) serve(conn net.Conn) {
 
 	handled = true
 
-	go func() {
-		defer func() { _ = conn.Close() }()
-		defer func() { _ = peer.Close() }()
-
-		_, _ = io.Copy(conn, peer)
-	}()
-
-	go func() {
-		defer func() { _ = conn.Close() }()
-		defer func() { _ = peer.Close() }()
-
-		// rd may already hold bytes the client sent after the request.
-		_, _ = io.Copy(peer, rd)
-	}()
+	// rd may already hold bytes the client sent after the request.
+	proxyCopy(readerConn{Conn: conn, r: rd}, peer)
 }
 
 func (s *HTTPServer) listen(network, addr string) (net.Listener, error) {

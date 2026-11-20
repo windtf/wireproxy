@@ -233,3 +233,63 @@ func TestHTTPServerConnectForwardsEarlyBytes(t *testing.T) {
 		t.Fatalf("unexpected echo %q", buf)
 	}
 }
+
+func TestHTTPServerConnectHalfClose(t *testing.T) {
+	// The origin replies only after the client has half-closed.
+	originLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = originLn.Close() }()
+	go func() {
+		conn, err := originLn.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		req, _ := io.ReadAll(conn)
+		_, _ = conn.Write(append([]byte("reply to "), req...))
+	}()
+
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, originLn.Addr().String())
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := clientConn.Write([]byte("CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	rd := bufio.NewReader(clientConn)
+	for {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+
+	if _, err := clientConn.Write([]byte("request")); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientConn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "reply to request" {
+		t.Fatalf("got %q after half-close", got)
+	}
+}

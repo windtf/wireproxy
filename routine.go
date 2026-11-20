@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -262,17 +261,6 @@ func (c CredentialValidator) Valid(username, password string) bool {
 	return u&p == 1
 }
 
-// connForward copy data from `from` to `to`
-func connForward(from io.ReadWriteCloser, to io.ReadWriteCloser) {
-	defer func() { _ = from.Close() }()
-	defer func() { _ = to.Close() }()
-
-	_, err := io.Copy(to, from)
-	if err != nil && !errors.Is(err, net.ErrClosed) {
-		errorLogger.Printf("Cannot forward traffic: %s\n", err.Error())
-	}
-}
-
 // tcpClientForward starts a new connection via wireguard and forward traffic from `conn`
 func tcpClientForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 	target, err := vt.resolveToAddrPort(raddr)
@@ -291,8 +279,7 @@ func tcpClientForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 		return
 	}
 
-	go connForward(sconn, conn)
-	go connForward(conn, sconn)
+	proxyCopy(sconn, conn)
 }
 
 // STDIOTcpForward starts a new connection via wireguard and forward traffic from `conn`
@@ -310,8 +297,7 @@ func STDIOTcpForward(vt *VirtualTun, raddr *addressPort, input *os.File, output 
 		return
 	}
 
-	go connForward(input, sconn)
-	go connForward(sconn, output)
+	proxyCopy(sconn, stdioConn{in: input, out: output})
 }
 
 // SpawnRoutine spawns a local TCP server which acts as a proxy to the specified target
@@ -363,9 +349,7 @@ func tcpServerForward(vt *VirtualTun, raddr *addressPort, conn net.Conn) {
 		return
 	}
 
-	go connForward(sconn, conn)
-	go connForward(conn, sconn)
-
+	proxyCopy(sconn, conn)
 }
 
 // SpawnRoutine spawns a TCP server on wireguard which acts as a proxy to the specified target

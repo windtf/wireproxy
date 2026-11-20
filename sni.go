@@ -38,15 +38,7 @@ func peekClientHello(conn net.Conn) (string, io.ReadWriteCloser, error) {
 		},
 	}).Handshake()
 
-	wrappedConn := struct {
-		io.Reader
-		io.Writer
-		io.Closer
-	}{
-		Reader: io.MultiReader(peekedBytes, conn),
-		Writer: conn,
-		Closer: conn,
-	}
+	wrappedConn := readerConn{Conn: conn, r: io.MultiReader(peekedBytes, conn)}
 
 	var serverName string
 	if hello != nil {
@@ -57,7 +49,8 @@ func peekClientHello(conn net.Conn) (string, io.ReadWriteCloser, error) {
 	return serverName, wrappedConn, err
 }
 
-// Get SNI hostname, dial out through tunnel, then proxy data
+// Get SNI hostname, dial out through tunnel, then proxy data until both
+// directions are done
 func sniProxyForward(dial func(string, string) (net.Conn, error), conn net.Conn) error {
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return fmt.Errorf("set read deadline failed: %w", err)
@@ -82,8 +75,7 @@ func sniProxyForward(dial func(string, string) (net.Conn, error), conn net.Conn)
 		return fmt.Errorf("tun tcp dial failed: %w", err)
 	}
 
-	go connForward(clientConn, backendConn)
-	go connForward(backendConn, clientConn)
+	proxyCopy(clientConn, backendConn)
 
 	return nil
 }
