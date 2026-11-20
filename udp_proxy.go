@@ -76,7 +76,7 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 				sessionMu.Lock()
 				for key, sess := range sessions {
 					if sess.inactive(now) {
-						infof("UDPProxyTunnel: closing inactive session for %s", key)
+						debugf("UDPProxyTunnel: closing inactive session for %s", key)
 						sess.close()
 						delete(sessions, key)
 					}

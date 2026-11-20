@@ -74,7 +74,7 @@ Invalid arguments, including a missing configuration path, print the usage to st
 | ------- | ------ |
 | `error` | Errors only. `-s`/`--silent` is an alias for this level. |
 | `info`  | Errors and startup messages (the default). The wireguard device logs errors only. |
-| `debug` | Also a line for every request (`Resolving address for ...` for SOCKS5 name lookups, `Health metric request` for the health endpoint) and the verbose wireguard device log (handshakes, keepalives). |
+| `debug` | Also a line for every request (`Resolving address for ...` for SOCKS5 name lookups, `Health metric request` for the health endpoint, closed idle UDP sessions) and the verbose wireguard device log (handshakes, keepalives). |
 
 # Build instruction
 
