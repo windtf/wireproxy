@@ -83,8 +83,7 @@ func TestUsageErrorExitsNonZero(t *testing.T) {
 	}
 }
 
-func TestSIGTERMShutsDownCleanly(t *testing.T) {
-	const config = `
+const testConfig = `
 [Interface]
 PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
 Address = 10.5.0.2
@@ -95,43 +94,83 @@ PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=
 AllowedIPs = 0.0.0.0/0, ::/0
 Endpoint = 127.0.0.1:51820
 `
+
+func writeTestConfig(t *testing.T) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "wireproxy.conf")
-	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(testConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return path
+}
 
-	// The health endpoint comes up after the signal handler is installed, so
-	// once it answers the child is ready for SIGTERM.
+// freeAddr returns a loopback address that was free a moment ago. The caller
+// must tolerate another process taking it before use.
+func freeAddr(t *testing.T) string {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := l.Addr().String()
-	l.Close()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperMain$")
+// startChild starts main() in a child process and returns once its health
+// endpoint answers, which happens after the signal handler is installed. ok is
+// false if the child exited first, for example because another process took
+// the port between freeAddr and the child's bind.
+func startChild(t *testing.T, path, addr string) (cmd *exec.Cmd, done chan error, stderr *bytes.Buffer, ok bool) {
+	t.Helper()
+	cmd = exec.Command(os.Args[0], "-test.run=^TestHelperMain$")
 	cmd.Env = append(os.Environ(), "WIREPROXY_TEST_ARGS=-s -c "+path+" -i "+addr)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr = &bytes.Buffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 
-	done := make(chan error, 1)
+	done = make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
+		select {
+		case err := <-done:
+			done <- err
+			return cmd, done, stderr, false
+		default:
+		}
 		resp, err := http.Get("http://" + addr + "/readyz")
 		if err == nil {
-			resp.Body.Close()
-			break
+			_ = resp.Body.Close()
+			return cmd, done, stderr, true
 		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
 			t.Fatalf("child never became ready: %v\n%s", err, stderr.String())
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestSIGTERMShutsDownCleanly(t *testing.T) {
+	path := writeTestConfig(t)
+
+	var (
+		cmd    *exec.Cmd
+		done   chan error
+		stderr *bytes.Buffer
+		ok     bool
+	)
+	for attempt := 0; attempt < 3 && !ok; attempt++ {
+		cmd, done, stderr, ok = startChild(t, path, freeAddr(t))
+	}
+	if !ok {
+		t.Fatalf("child never started: %s", stderr.String())
 	}
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
