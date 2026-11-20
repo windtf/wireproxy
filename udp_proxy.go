@@ -51,7 +51,7 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 	if err != nil {
 		log.Fatalf("UDPProxyTunnelConfig: could not listen on %s: %v", conf.BindAddress, err)
 	}
-	log.Printf("UDPProxyTunnel listening on %s, forwarding to %s", conf.BindAddress, conf.Target)
+	infof("UDPProxyTunnel listening on %s, forwarding to %s", conf.BindAddress, conf.Target)
 
 	inactivityDur := time.Duration(conf.InactivityTimeout) * time.Second
 	sessions := make(map[string]*udpSession)
@@ -76,7 +76,7 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 				sessionMu.Lock()
 				for key, sess := range sessions {
 					if sess.inactive(now) {
-						log.Printf("UDPProxyTunnel: closing inactive session for %s", key)
+						infof("UDPProxyTunnel: closing inactive session for %s", key)
 						sess.close()
 						delete(sessions, key)
 					}

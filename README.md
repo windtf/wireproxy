@@ -45,8 +45,8 @@ of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
 
 ```bash
 usage: wireproxy [-h|--help] [-c|--config "<value>"] [-s|--silent]
-                 [-d|--daemon] [-i|--info "<value>"] [-v|--version]
-                 [-n|--configtest]
+                 [-l|--log-level (error|info|debug)] [-d|--daemon] [-i|--info
+                 "<value>"] [-v|--version] [-n|--configtest]
 
                  Userspace wireguard client for proxying
 
@@ -55,13 +55,24 @@ Arguments:
   -h  --help        Print help information
   -c  --config      Path of configuration file
                     Default paths: /etc/wireproxy/wireproxy.conf, $HOME/.config/wireproxy.conf
-  -s  --silent      Silent mode
+  -s  --silent      Silent mode, same as --log-level error
+  -l  --log-level   Log level. Default: info
   -d  --daemon      Make wireproxy run in background
   -i  --info        Specify the address and port for exposing health status
   -v  --version     Print version
   -n  --configtest  Configtest mode. Only check the configuration file for
                     validity.
 ```
+
+## Log levels
+
+`--log-level` controls how much wireproxy prints to stderr:
+
+| Level   | Output |
+| ------- | ------ |
+| `error` | Errors only. `-s`/`--silent` is an alias for this level. |
+| `info`  | Errors and startup messages (the default). The wireguard device logs errors only. |
+| `debug` | Also a line for every request (`Resolving address for ...` for SOCKS5 name lookups, `Health metric request` for the health endpoint) and the verbose wireguard device log (handshakes, keepalives). |
 
 # Build instruction
 

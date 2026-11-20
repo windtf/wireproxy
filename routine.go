@@ -121,7 +121,7 @@ func (d VirtualTun) ResolveAddrWithContext(ctx context.Context, name string) (*n
 // Resolve resolves a hostname and returns an IP.
 // DNS traffic may or may not be routed depending on VirtualTun's setting
 func (d VirtualTun) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	log.Printf("Resolving address for %s\n", name)
+	debugf("Resolving address for %s\n", name)
 
 	addr, err := d.ResolveAddrWithContext(ctx, name)
 	if err != nil {
@@ -410,7 +410,7 @@ func (config *SNIConfig) SpawnRoutine(vt *VirtualTun) {
 }
 
 func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Health metric request: %s\n", r.URL.Path)
+	debugf("Health metric request: %s\n", r.URL.Path)
 	switch path.Clean(r.URL.Path) {
 	case "/readyz":
 		d.PingRecordLock.Lock()

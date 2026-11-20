@@ -149,6 +149,22 @@ func lock(stage string, roFilles ...string) {
 	}
 }
 
+// logLevels maps the command line options to wireproxy's and wireguard-go's
+// log levels. -s is an alias for --log-level error.
+func logLevels(level string, silent bool) (wireproxy.LogLevel, int) {
+	if silent {
+		level = "error"
+	}
+	switch level {
+	case "error":
+		return wireproxy.LogError, device.LogLevelError
+	case "debug":
+		return wireproxy.LogDebug, device.LogLevelVerbose
+	default:
+		return wireproxy.LogInfo, device.LogLevelError
+	}
+}
+
 func extractPort(addr string) uint16 {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -210,7 +226,8 @@ func main() {
 	parser := argparse.NewParser("wireproxy", "Userspace wireguard client for proxying")
 
 	config := parser.String("c", "config", &argparse.Options{Help: "Path of configuration file"})
-	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode"})
+	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode, same as --log-level error"})
+	logLevel := parser.Selector("l", "log-level", []string{"error", "info", "debug"}, &argparse.Options{Help: "Log level", Default: "info"})
 	daemon := parser.Flag("d", "daemon", &argparse.Options{Help: "Make wireproxy run in background"})
 	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status"})
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
@@ -272,14 +289,12 @@ func main() {
 	// https://github.com/WireGuard/wireguard-go/blob/master/device/logger.go#L39
 	// so redirect STDOUT to STDERR, we don't want to print anything to STDOUT anyways
 	os.Stdout = os.Stderr
-	logLevel := device.LogLevelVerbose
-	if *silent {
-		logLevel = device.LogLevelSilent
-	}
+	wireproxyLogLevel, deviceLogLevel := logLevels(*logLevel, *silent)
+	wireproxy.SetLogLevel(wireproxyLogLevel)
 
 	lock("ready", tlsFilePaths(conf.Routines)...)
 
-	tun, err := wireproxy.StartWireguard(conf, logLevel)
+	tun, err := wireproxy.StartWireguard(conf, deviceLogLevel)
 	if err != nil {
 		log.Fatal(err)
 	}
