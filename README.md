@@ -64,7 +64,7 @@ Arguments:
                     validity.
 ```
 
-Invalid arguments print the usage to stderr and exit with status 2.
+Invalid arguments, including a missing configuration path, print the usage to stderr and exit with status 2. Configuration and startup errors exit with status 1.
 
 ## Log levels
 

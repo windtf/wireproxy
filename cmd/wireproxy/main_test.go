@@ -51,10 +51,10 @@ func TestHelperMain(t *testing.T) {
 	os.Exit(0)
 }
 
-func runMain(t *testing.T, args string) (code int, stdout, stderr string) {
+func runMain(t *testing.T, args string, env ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperMain$")
-	cmd.Env = append(os.Environ(), "WIREPROXY_TEST_ARGS="+args)
+	cmd.Env = append(append(os.Environ(), "WIREPROXY_TEST_ARGS="+args), env...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -156,5 +156,32 @@ func TestHelpExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "usage: wireproxy") {
 		t.Errorf("help not printed to stdout: %q", stdout)
+	}
+}
+
+func TestMissingConfigIsUsageError(t *testing.T) {
+	// An empty HOME hides any default config under $HOME/.config.
+	code, stdout, stderr := runMain(t, "", "HOME="+t.TempDir())
+	if _, err := os.Stat("/etc/wireproxy/wireproxy.conf"); err == nil {
+		t.Skip("a default config exists on this machine")
+	}
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "configuration path is required") || !strings.Contains(stderr, "usage: wireproxy") {
+		t.Errorf("stderr = %q", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("unexpected stdout: %q", stdout)
+	}
+}
+
+func TestUnreadableConfigExitsOne(t *testing.T) {
+	code, _, stderr := runMain(t, "-c "+filepath.Join(t.TempDir(), "missing.conf"))
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stderr == "" {
+		t.Error("expected an error message on stderr")
 	}
 }

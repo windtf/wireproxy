@@ -248,8 +248,9 @@ func main() {
 		if path, config_exist := configFilePath(); config_exist {
 			*config = path
 		} else {
-			fmt.Println("configuration path is required")
-			return
+			fmt.Fprintln(os.Stderr, "configuration path is required")
+			fmt.Fprint(os.Stderr, parser.Usage(nil))
+			os.Exit(2)
 		}
 	}
 
@@ -280,7 +281,8 @@ func main() {
 		cmd := exec.Command(exePath, args...)
 		err = cmd.Start()
 		if err != nil {
-			fmt.Println(err.Error())
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
 		}
 		return
 	}
