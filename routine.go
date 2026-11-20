@@ -173,14 +173,12 @@ func (passthroughResolver) Resolve(ctx context.Context, name string) (context.Co
 	return ctx, nil, nil
 }
 
-// tunnelDial dials address through the tunnel. Hostnames are resolved through the
-// DNS cache (when [Resolve] CacheTTL is set) instead of netstack's own uncached lookup.
+// tunnelDial dials address through the tunnel. Hostnames are resolved with
+// lookupAddr (the system resolver without DNS servers, the tunnel's otherwise) and
+// through the DNS cache when [Resolve] CacheTTL is set. netstack's own lookup is not
+// used: it has no DNS servers in SystemDNS mode.
 func (d VirtualTun) tunnelDial(ctx context.Context, network, address string) (net.Conn, error) {
-	if d.SystemDNS {
-		// netstack has no DNS servers in this mode; leave its behaviour unchanged
-		return d.Tnet.DialContext(ctx, network, address)
-	}
-	return dialCached(ctx, d.cache, d.Tnet.LookupContextHost, d.Tnet.DialContext, network, address)
+	return dialCached(ctx, d.cache, d.lookupAddr, d.Tnet.DialContext, network, address)
 }
 
 // RoutedDial returns a dialer that sends whitelisted hosts through the tunnel

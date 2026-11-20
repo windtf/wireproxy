@@ -244,7 +244,8 @@ ResolveStrategy = auto
 # Repeat connections to the same hostname skip the DNS round trip, but a changed
 # IP is only seen up to `CacheTTL` seconds late. 60 is a reasonable value.
 # The cache applies to hostname dials through the tunnel (HTTP, SNI and SOCKS5 proxies),
-# and to TCP tunnels whose Target is a hostname.
+# and to TCP tunnels whose Target is a hostname. Names are resolved by the tunnel's `DNS`
+# servers, or by the system resolver if `DNS` is not set.
 CacheTTL = 60
 ```
 

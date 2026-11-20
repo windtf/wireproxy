@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.zx2c4.com/wireguard/tun/netstack"
 )
 
 type fakeClock struct {
@@ -403,6 +407,54 @@ func TestDialCachedLookupError(t *testing.T) {
 	}
 }
 
+func TestDialCachedNilCacheLooksUpEveryTime(t *testing.T) {
+	lookups := 0
+	d := &fakeDialer{}
+	for i := 0; i < 2; i++ {
+		conn, err := dialCached(context.Background(), nil, countingLookup(&lookups, "9.9.9.9"), d.dial, "tcp", "example.com:443")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+	}
+	if lookups != 2 {
+		t.Fatalf("expected a lookup per dial, got %d", lookups)
+	}
+	if want := []string{"tcp 9.9.9.9:443", "tcp 9.9.9.9:443"}; !slices.Equal(d.calls, want) {
+		t.Fatalf("dials = %v, want %v", d.calls, want)
+	}
+}
+
+// Without DNS servers netstack cannot resolve names, so tunnelDial must resolve
+// with the system resolver itself and hand netstack an IP.
+func TestTunnelDialSystemDNS(t *testing.T) {
+	tun, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.0.0.2")}, nil, 1420)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tun.Close() }()
+	// netstack blocks on writing packets that nothing reads
+	go func() {
+		bufs, sizes := [][]byte{make([]byte, 2048)}, []int{0}
+		for {
+			if _, err := tun.Read(bufs, sizes, 0); err != nil {
+				return
+			}
+		}
+	}()
+
+	vt := VirtualTun{Tnet: tnet, SystemDNS: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = vt.tunnelDial(ctx, "tcp4", "localhost:80")
+	if err == nil {
+		t.Fatal("expected the dial through an unconnected tunnel to fail")
+	}
+	if strings.Contains(err.Error(), "cannot marshal DNS message") {
+		t.Fatalf("hostname was resolved by netstack instead of the system resolver: %v", err)
+	}
+}
+
 func TestDialCachedPassthrough(t *testing.T) {
 	c, _ := newTestDNSCache(time.Minute)
 	tests := []struct {
@@ -410,7 +462,6 @@ func TestDialCachedPassthrough(t *testing.T) {
 		cache   *dnsCache
 		address string
 	}{
-		{"nil cache", nil, "example.com:443"},
 		{"ipv4 literal", c, "1.2.3.4:443"},
 		{"ipv6 literal", c, "[2001:db8::1]:443"},
 		{"no port", c, "example.com"},
