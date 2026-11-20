@@ -91,6 +91,7 @@ Instructions for using wireproxy with Firefox container tabs and auto-start on M
 [Interface]
 Address = 10.200.200.2/32 # The subnet should be /32 and /128 for IPv4 and v6 respectively
 # MTU = 1420 (optional)
+# EndpointReresolveInterval = 30 (optional, see "Dynamic DNS endpoints" below)
 PrivateKey = uCTIK+56CPyCvwJxmU5dBfuyJvPuSXAq1FzHdnIxe1Q=
 # PrivateKey = $MY_WIREGUARD_PRIVATE_KEY # Alternatively, reference environment variables
 DNS = 10.200.200.1
@@ -254,6 +255,18 @@ PublicKey = YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY=
 AllowedIPs = 10.254.254.100/32
 # Note there is no Endpoint defined here.
 ```
+
+# Dynamic DNS endpoints
+
+A `[Peer]` `Endpoint` that is a hostname is resolved when the config is loaded.
+To follow a peer whose IP address changes (e.g. behind dynamic DNS), wireproxy checks
+every `EndpointReresolveInterval` seconds (`[Interface]`, defaults to 30, `0` disables)
+the last handshake of each peer with a hostname endpoint. If there has been no
+handshake for more than 135 seconds, the hostname is resolved again and the peer's
+endpoint is updated if the address changed. A failed lookup is logged and the
+current endpoint is kept. Endpoints given as an IP address are never re-resolved.
+
+The hostname must still resolve when wireproxy starts.
 
 # Health endpoint
 

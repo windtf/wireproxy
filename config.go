@@ -21,6 +21,9 @@ type PeerConfig struct {
 	Endpoint     *string
 	KeepAlive    int
 	AllowedIPs   []netip.Prefix
+	// EndpointRaw is the endpoint as written in the config (host:port),
+	// kept so that a hostname can be resolved again at runtime.
+	EndpointRaw string
 }
 
 // DeviceConfig contains the information to initiate a wireguard connection
@@ -33,6 +36,9 @@ type DeviceConfig struct {
 	ListenPort         *int
 	CheckAlive         []netip.Addr
 	CheckAliveInterval int
+	// EndpointReresolveInterval is how often, in seconds, peers with a hostname
+	// endpoint are checked for a stale handshake. 0 disables re-resolving.
+	EndpointReresolveInterval int
 }
 
 type UDPProxyTunnelConfig struct {
@@ -326,6 +332,19 @@ func ParseInterface(cfg *ini.File, device *DeviceConfig) error {
 		device.CheckAliveInterval = value
 	}
 
+	device.EndpointReresolveInterval = 30
+	if sectionKey, err := section.GetKey("EndpointReresolveInterval"); err == nil {
+		value, err := sectionKey.Int()
+		if err != nil {
+			return err
+		}
+		if value < 0 {
+			return errors.New("EndpointReresolveInterval should not be negative")
+		}
+
+		device.EndpointReresolveInterval = value
+	}
+
 	return nil
 }
 
@@ -357,12 +376,13 @@ func ParsePeers(cfg *ini.File, peers *[]PeerConfig) error {
 		}
 
 		if sectionKey, err := section.GetKey("Endpoint"); err == nil {
-			value := sectionKey.String()
-			decoded, err = resolveIPPAndPort(strings.ToLower(value))
+			value := strings.ToLower(sectionKey.String())
+			decoded, err = resolveIPPAndPort(value)
 			if err != nil {
 				return err
 			}
 			peer.Endpoint = &decoded
+			peer.EndpointRaw = value
 		}
 
 		if sectionKey, err := section.GetKey("PersistentKeepalive"); err == nil {
