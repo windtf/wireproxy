@@ -86,7 +86,8 @@ func (c *dnsCache) lookup(ctx context.Context, name string, fn func(context.Cont
 // returned address in order. It mirrors the loop in netstack's DialContext, which
 // would otherwise do its own uncached lookup: the context is checked before each
 // attempt, a deadline is shared out across the remaining addresses, and the first
-// dial error is returned if none succeeds. IP literals, a nil cache and
+// dial error is returned if none succeeds. Cancellation and timeouts are reported
+// as a *net.OpError, as netstack does. IP literals, a nil cache and
 // unparsable addresses are passed to dial unchanged.
 func dialCached(
 	ctx context.Context,
@@ -127,7 +128,7 @@ func dialCached(
 	for i, saddr := range suitable {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, &net.OpError{Op: "dial", Net: network, Err: ctx.Err()}
 		default:
 		}
 
@@ -136,7 +137,7 @@ func dialCached(
 			attempt, err := attemptDeadline(time.Now(), deadline, len(suitable)-i)
 			if err != nil {
 				if firstErr == nil {
-					firstErr = err
+					firstErr = &net.OpError{Op: "dial", Net: network, Err: err}
 				}
 				break
 			}

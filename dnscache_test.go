@@ -306,6 +306,37 @@ func TestDialCachedCancelledContext(t *testing.T) {
 	}
 }
 
+func TestDialCachedContextErrorsAreOpErrors(t *testing.T) {
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{"cancelled", cancelled, context.Canceled},
+		{"deadline exceeded", expired, context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := newTestDNSCache(time.Minute)
+			lookups := 0
+			d := &fakeDialer{}
+			_, err := dialCached(tt.ctx, c, countingLookup(&lookups, "1.2.3.4"), d.dial, "tcp", "example.com:443")
+			var opErr *net.OpError
+			if !errors.As(err, &opErr) || opErr.Op != "dial" || opErr.Net != "tcp" {
+				t.Fatalf("expected a dial *net.OpError for tcp, got %#v", err)
+			}
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestDialCachedSharesDeadlineAcrossAddresses(t *testing.T) {
 	c, _ := newTestDNSCache(time.Minute)
 	lookups := 0
