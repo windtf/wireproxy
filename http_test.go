@@ -170,3 +170,66 @@ func TestHTTPServerStripsHopByHopHeaders(t *testing.T) {
 		t.Fatal("origin did not receive the request")
 	}
 }
+
+// startEchoServer accepts connections and echoes everything back.
+func startEchoServer(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+func TestHTTPServerConnectForwardsEarlyBytes(t *testing.T) {
+	echo := startEchoServer(t)
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, echo)
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+
+	// The payload arrives in the same segment as the CONNECT request, so it
+	// sits in the proxy's bufio.Reader.
+	if _, err := clientConn.Write([]byte("CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\nEARLY")); err != nil {
+		t.Fatal(err)
+	}
+
+	rd := bufio.NewReader(clientConn)
+	status, err := rd.ReadString('\n')
+	if err != nil || status != "HTTP/1.1 200 Connection established\r\n" {
+		t.Fatalf("unexpected status %q (err %v)", status, err)
+	}
+	if line, err := rd.ReadString('\n'); err != nil || line != "\r\n" {
+		t.Fatalf("unexpected header terminator %q (err %v)", line, err)
+	}
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, len("EARLY"))
+	if _, err := io.ReadFull(rd, buf); err != nil {
+		t.Fatalf("early bytes were not forwarded: %v", err)
+	}
+	if string(buf) != "EARLY" {
+		t.Fatalf("unexpected echo %q", buf)
+	}
+}

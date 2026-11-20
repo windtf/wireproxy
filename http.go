@@ -187,7 +187,8 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		defer func() { _ = peer.Close() }()
 
-		_, _ = io.Copy(peer, conn)
+		// rd may already hold bytes the client sent after the request.
+		_, _ = io.Copy(peer, rd)
 	}()
 }
 
