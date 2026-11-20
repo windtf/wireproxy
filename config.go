@@ -559,10 +559,21 @@ func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 }
 
 func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
-	config := &ResolveConfig{}
+	config := &ResolveConfig{ResolveStrategy: "auto"}
 
-	resolvStrategy, _ := parseString(section, "ResolveStrategy")
-	config.ResolveStrategy = resolvStrategy
+	if section.HasKey("ResolveStrategy") {
+		resolveStrategy, err := parseString(section, "ResolveStrategy")
+		if err != nil {
+			return nil, err
+		}
+		resolveStrategy = strings.ToLower(resolveStrategy)
+		switch resolveStrategy {
+		case "auto", "ipv4", "ipv6":
+			config.ResolveStrategy = resolveStrategy
+		default:
+			return nil, errors.New("ResolveStrategy should be auto, ipv4 or ipv6, got \"" + resolveStrategy + "\"")
+		}
+	}
 
 	if key, err := section.GetKey("CacheTTL"); err == nil {
 		ttl, err := key.Int()
