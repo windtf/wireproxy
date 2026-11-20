@@ -240,6 +240,10 @@ InactivityTimeout = 30 # If its set to 0, it will never timeout
 # `ipv6`: Prioritize AAAA records       .
 # `auto` (Default): If the WireGuard interface has IPv4 address only, it's equivalent to `ipv4`, otherwise it's equivalent to `ipv6`.
 ResolveStrategy = auto 
+# Cache successful DNS lookups for this many seconds (default `0`: no cache).
+# Repeat connections to the same hostname skip the DNS round trip, but a changed
+# IP is only seen up to `CacheTTL` seconds late. 60 is a reasonable value.
+CacheTTL = 60
 ```
 
 Wireproxy can also allow peers to connect to it:

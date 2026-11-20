@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"time"
 
 	"net/netip"
 
@@ -110,5 +111,6 @@ func StartWireguard(conf *Configuration, logLevel int) (*VirtualTun, error) {
 		SystemDNS:      len(setting.DNS) == 0,
 		PingRecord:     make(map[string]uint64),
 		PingRecordLock: new(sync.Mutex),
+		cache:          newDNSCache(time.Duration(conf.Resolve.CacheTTL) * time.Second),
 	}, nil
 }

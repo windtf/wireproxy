@@ -108,6 +108,44 @@ PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=`
 	}
 }
 
+func TestResolveCacheTTL(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		want    int
+		wantErr bool
+	}{
+		{"unset", "[Resolve]\nResolveStrategy = ipv4", 0, false},
+		{"positive", "[Resolve]\nCacheTTL = 60", 60, false},
+		{"zero", "[Resolve]\nCacheTTL = 0", 0, false},
+		{"negative", "[Resolve]\nCacheTTL = -1", 0, true},
+		{"not a number", "[Resolve]\nCacheTTL = soon", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iniData, err := loadIniConfig(tt.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := parseResolveConfig(iniData.Section("Resolve"))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.CacheTTL != tt.want {
+				t.Fatalf("CacheTTL = %d, want %d", cfg.CacheTTL, tt.want)
+			}
+		})
+	}
+}
+
 func TestInactivityTimeoutCannotBeNegative(t *testing.T) {
 	const config = `
 [UDPProxyTunnel]

@@ -52,6 +52,8 @@ type VirtualTun struct {
 	// PingRecord stores the last time an IP was pinged
 	PingRecord     map[string]uint64
 	PingRecordLock *sync.Mutex
+	// cache is a pointer so every copy of VirtualTun shares it; nil disables caching
+	cache *dnsCache
 }
 
 // RoutineSpawner spawns a routine (e.g. socks5, tcp static routes) after the configuration is parsed
@@ -65,8 +67,13 @@ type addressPort struct {
 }
 
 // LookupAddr lookups a hostname.
-// DNS traffic may or may not be routed depending on VirtualTun's setting
+// DNS traffic may or may not be routed depending on VirtualTun's setting.
+// Successful answers are cached for [Resolve] CacheTTL seconds when it is set.
 func (d VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
+	return d.cache.lookup(ctx, name, d.lookupAddr)
+}
+
+func (d VirtualTun) lookupAddr(ctx context.Context, name string) ([]string, error) {
 	if d.SystemDNS {
 		return net.DefaultResolver.LookupHost(ctx, name)
 	}
