@@ -13,13 +13,25 @@ import (
 
 // handshakeRecords reports the last handshake time of every peer found in an
 // IpcGet response as unix seconds (0 if there has never been one), keyed by
-// "handshake:<base64 public key>". stale is true if any peer has no handshake
-// or one older than maxAge. Peers without an endpoint are ignored: they only
-// answer handshakes and have never connected, so none can be expected of them.
-func handshakeRecords(ipc string, maxAge time.Duration, now time.Time) (records map[string]uint64, stale bool) {
+// "handshake:<base64 public key>". stale is true if any checked peer has no
+// handshake or one older than maxAge.
+//
+// Peers with no Endpoint in the configuration only answer handshakes and have
+// never connected out, so none can be expected of them: they are left out of the
+// verdict and flagged in records with a "handshake_skipped:<base64 public key>"
+// entry of 1. The configuration is consulted rather than the IPC "endpoint" line,
+// which wireguard also reports for endpoints learned from incoming packets.
+func handshakeRecords(ipc string, peers []PeerConfig, maxAge time.Duration, now time.Time) (records map[string]uint64, stale bool) {
+	configured := make(map[string]bool)
+	for _, peer := range peers {
+		if peer.Endpoint != nil {
+			configured[base64Key(peer.PublicKey)] = true
+		}
+	}
+
 	records = make(map[string]uint64)
-	var name string
-	endpoints := make(map[string]bool)
+	skipped := make(map[string]bool)
+	var key64 string
 	for _, line := range strings.Split(ipc, "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
@@ -27,33 +39,39 @@ func handshakeRecords(ipc string, maxAge time.Duration, now time.Time) (records 
 		}
 		switch key {
 		case "public_key":
-			name = value
-			if raw, err := hex.DecodeString(value); err == nil {
-				name = base64.StdEncoding.EncodeToString(raw)
-			}
-			name = "handshake:" + name
-			records[name] = 0
-		case "endpoint":
-			if name != "" {
-				endpoints[name] = true
+			key64 = base64Key(value)
+			records["handshake:"+key64] = 0
+			if !configured[key64] {
+				skipped[key64] = true
 			}
 		case "last_handshake_time_sec":
-			if sec, err := strconv.ParseUint(value, 10, 63); err == nil && name != "" {
-				records[name] = sec
+			if sec, err := strconv.ParseUint(value, 10, 63); err == nil && key64 != "" {
+				records["handshake:"+key64] = sec
 			}
 		}
 	}
 
-	for name, record := range records {
-		if !endpoints[name] {
-			delete(records, name)
+	for peer, record := range records {
+		if skipped[strings.TrimPrefix(peer, "handshake:")] {
 			continue
 		}
 		if record == 0 || now.Sub(time.Unix(int64(record), 0)) > maxAge {
 			stale = true
 		}
 	}
+	for peer := range skipped {
+		records["handshake_skipped:"+peer] = 1
+	}
 	return records, stale
+}
+
+// base64Key converts a wireguard key given as hex (as in IpcGet and the parsed
+// configuration) to base64; a key that is not hex is returned unchanged.
+func base64Key(key string) string {
+	if raw, err := hex.DecodeString(key); err == nil {
+		return base64.StdEncoding.EncodeToString(raw)
+	}
+	return key
 }
 
 // Healthcheck requests /readyz from the health endpoint listening on addr

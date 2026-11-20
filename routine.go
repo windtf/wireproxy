@@ -437,7 +437,7 @@ func (d VirtualTun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			handshakes, stale := handshakeRecords(get, time.Duration(d.Conf.MaxHandshakeAge)*time.Second, time.Now())
+			handshakes, stale := handshakeRecords(get, d.Conf.Peers, time.Duration(d.Conf.MaxHandshakeAge)*time.Second, time.Now())
 			for addr, record := range handshakes {
 				records[addr] = record
 			}
