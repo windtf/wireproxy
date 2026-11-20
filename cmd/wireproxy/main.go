@@ -289,6 +289,7 @@ func main() {
 	}
 
 	tun.StartPingIPs()
+	tun.StartEndpointReresolve()
 
 	if *info != "" {
 		go func() {
