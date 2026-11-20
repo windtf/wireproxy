@@ -2,6 +2,7 @@ package wireproxy
 
 import (
 	"github.com/go-ini/ini"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +106,88 @@ PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=`
 	var cfg DeviceConfig
 	if err := ParseInterface(iniData, &cfg); err == nil {
 		t.Fatal("expected non-positive CheckAliveInterval to be rejected")
+	}
+}
+
+func TestResolveCacheTTL(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		want    int
+		wantErr bool
+	}{
+		{"unset", "[Resolve]\nResolveStrategy = ipv4", 0, false},
+		{"positive", "[Resolve]\nCacheTTL = 60", 60, false},
+		{"zero", "[Resolve]\nCacheTTL = 0", 0, false},
+		{"negative", "[Resolve]\nCacheTTL = -1", 0, true},
+		{"not a number", "[Resolve]\nCacheTTL = soon", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iniData, err := loadIniConfig(tt.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := parseResolveConfig(iniData.Section("Resolve"))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.CacheTTL != tt.want {
+				t.Fatalf("CacheTTL = %d, want %d", cfg.CacheTTL, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveStrategy(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		want    string
+		wantErr bool
+	}{
+		{"section without the key defaults to auto", "[Resolve]\nCacheTTL = 60", "auto", false},
+		{"auto", "[Resolve]\nResolveStrategy = auto", "auto", false},
+		{"ipv4", "[Resolve]\nResolveStrategy = ipv4", "ipv4", false},
+		{"ipv6", "[Resolve]\nResolveStrategy = ipv6", "ipv6", false},
+		{"case-insensitive value is normalised", "[Resolve]\nResolveStrategy = IPv4", "ipv4", false},
+		{"key name is case-insensitive", "[Resolve]\nresolvestrategy = ipv6", "ipv6", false},
+		{"invalid value", "[Resolve]\nResolveStrategy = ipv5", "", true},
+		{"empty value", "[Resolve]\nResolveStrategy =", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iniData, err := loadIniConfig(tt.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := parseResolveConfig(iniData.Section("Resolve"))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !strings.Contains(err.Error(), "ResolveStrategy") {
+					t.Fatalf("error does not name the key: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ResolveStrategy != tt.want {
+				t.Fatalf("ResolveStrategy = %q, want %q", cfg.ResolveStrategy, tt.want)
+			}
+		})
 	}
 }
 

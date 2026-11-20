@@ -83,6 +83,8 @@ type HTTPConfig struct {
 
 type ResolveConfig struct {
 	ResolveStrategy string
+	// CacheTTL is how long, in seconds, successful lookups are cached. 0 disables the cache.
+	CacheTTL int
 }
 
 type Configuration struct {
@@ -557,10 +559,32 @@ func parseHTTPConfig(section *ini.Section) (RoutineSpawner, error) {
 }
 
 func parseResolveConfig(section *ini.Section) (*ResolveConfig, error) {
-	config := &ResolveConfig{}
+	config := &ResolveConfig{ResolveStrategy: "auto"}
 
-	resolvStrategy, _ := parseString(section, "ResolveStrategy")
-	config.ResolveStrategy = resolvStrategy
+	if section.HasKey("ResolveStrategy") {
+		resolveStrategy, err := parseString(section, "ResolveStrategy")
+		if err != nil {
+			return nil, err
+		}
+		resolveStrategy = strings.ToLower(resolveStrategy)
+		switch resolveStrategy {
+		case "auto", "ipv4", "ipv6":
+			config.ResolveStrategy = resolveStrategy
+		default:
+			return nil, errors.New("ResolveStrategy should be auto, ipv4 or ipv6, got \"" + resolveStrategy + "\"")
+		}
+	}
+
+	if key, err := section.GetKey("CacheTTL"); err == nil {
+		ttl, err := key.Int()
+		if err != nil {
+			return nil, err
+		}
+		if ttl < 0 {
+			return nil, errors.New("CacheTTL should not be negative")
+		}
+		config.CacheTTL = ttl
+	}
 
 	return config, nil
 }

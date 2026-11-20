@@ -94,6 +94,8 @@ Address = 10.200.200.2/32 # The subnet should be /32 and /128 for IPv4 and v6 re
 PrivateKey = uCTIK+56CPyCvwJxmU5dBfuyJvPuSXAq1FzHdnIxe1Q=
 # PrivateKey = $MY_WIREGUARD_PRIVATE_KEY # Alternatively, reference environment variables
 DNS = 10.200.200.1
+# Without DNS, hostnames for tunnelled connections are resolved by the host's resolver,
+# outside the tunnel.
 
 [Peer]
 PublicKey = QP+A67Z2UBrMgvNIdHv8gPel5URWNLS4B3ZQ2hQIZlg=
@@ -240,6 +242,13 @@ InactivityTimeout = 30 # If its set to 0, it will never timeout
 # `ipv6`: Prioritize AAAA records       .
 # `auto` (Default): If the WireGuard interface has IPv4 address only, it's equivalent to `ipv4`, otherwise it's equivalent to `ipv6`.
 ResolveStrategy = auto 
+# Cache successful DNS lookups for this many seconds (default `0`: no cache).
+# Repeat connections to the same hostname skip the DNS round trip, but a changed
+# IP is only seen up to `CacheTTL` seconds late. 60 is a reasonable value.
+# The cache applies to hostname dials through the tunnel (HTTP, SNI and SOCKS5 proxies),
+# and to TCP tunnels whose Target is a hostname. Names are resolved by the tunnel's `DNS`
+# servers, or by the system resolver if `DNS` is not set.
+CacheTTL = 60
 ```
 
 Wireproxy can also allow peers to connect to it:

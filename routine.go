@@ -52,6 +52,8 @@ type VirtualTun struct {
 	// PingRecord stores the last time an IP was pinged
 	PingRecord     map[string]uint64
 	PingRecordLock *sync.Mutex
+	// cache is a pointer so every copy of VirtualTun shares it; nil disables caching
+	cache *dnsCache
 }
 
 // RoutineSpawner spawns a routine (e.g. socks5, tcp static routes) after the configuration is parsed
@@ -65,8 +67,13 @@ type addressPort struct {
 }
 
 // LookupAddr lookups a hostname.
-// DNS traffic may or may not be routed depending on VirtualTun's setting
+// DNS traffic may or may not be routed depending on VirtualTun's setting.
+// Successful answers are cached for [Resolve] CacheTTL seconds when it is set.
 func (d VirtualTun) LookupAddr(ctx context.Context, name string) ([]string, error) {
+	return d.cache.lookup(ctx, name, d.lookupAddr)
+}
+
+func (d VirtualTun) lookupAddr(ctx context.Context, name string) ([]string, error) {
 	if d.SystemDNS {
 		return net.DefaultResolver.LookupHost(ctx, name)
 	}
@@ -166,13 +173,21 @@ func (passthroughResolver) Resolve(ctx context.Context, name string) (context.Co
 	return ctx, nil, nil
 }
 
+// tunnelDial dials address through the tunnel. Hostnames are resolved with
+// lookupAddr (the system resolver without DNS servers, the tunnel's otherwise) and
+// through the DNS cache when [Resolve] CacheTTL is set. netstack's own lookup is not
+// used: it has no DNS servers in SystemDNS mode.
+func (d VirtualTun) tunnelDial(ctx context.Context, network, address string) (net.Conn, error) {
+	return dialCached(ctx, d.cache, d.lookupAddr, d.Tnet.DialContext, network, address)
+}
+
 // RoutedDial returns a dialer that sends whitelisted hosts through the tunnel
 // and dials everything else directly. Used by the HTTP and SNI proxies, whose
 // dial callbacks receive the destination hostname intact.
 func (d VirtualTun) RoutedDial(router *DomainRouter) func(network, address string) (net.Conn, error) {
 	return func(network, address string) (net.Conn, error) {
 		if router.route(hostFromAddr(address)) {
-			return d.Tnet.Dial(network, address)
+			return d.tunnelDial(context.Background(), network, address)
 		}
 		return net.Dial(network, address)
 	}
@@ -188,7 +203,7 @@ func (d VirtualTun) routedSocks5Dial(router *DomainRouter) func(context.Context,
 			host = hostFromAddr(address)
 		}
 		if router.route(host) {
-			return d.Tnet.DialContext(ctx, network, address)
+			return d.tunnelDial(ctx, network, address)
 		}
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, network, address)
