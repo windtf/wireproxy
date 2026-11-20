@@ -10,9 +10,14 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const proxyAuthHeaderKey = "Proxy-Authorization"
+
+// httpReadRequestTimeout bounds how long a client may take to send its request
+// line and headers.
+var httpReadRequestTimeout = 30 * time.Second
 
 type HTTPServer struct {
 	config *HTTPConfig
@@ -132,10 +137,18 @@ func (s *HTTPServer) serve(conn net.Conn) {
 			_ = conn.Close()
 		}
 	}()
+	if err := conn.SetReadDeadline(time.Now().Add(httpReadRequestTimeout)); err != nil {
+		log.Printf("set read deadline failed: %s\n", err)
+		return
+	}
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {
 		log.Printf("read request failed: %s\n", err)
+		return
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		log.Printf("clear read deadline failed: %s\n", err)
 		return
 	}
 

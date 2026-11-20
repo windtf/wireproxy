@@ -293,3 +293,73 @@ func TestHTTPServerConnectHalfClose(t *testing.T) {
 		t.Fatalf("got %q after half-close", got)
 	}
 }
+
+func setReadRequestTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := httpReadRequestTimeout
+	httpReadRequestTimeout = d
+	t.Cleanup(func() { httpReadRequestTimeout = old })
+}
+
+func TestHTTPServerReadRequestTimeout(t *testing.T) {
+	setReadRequestTimeout(t, 100*time.Millisecond)
+	addr := startTestProxy(t, &HTTPServer{})
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+
+	// An incomplete request line, then silence.
+	if _, err := clientConn.Write([]byte("GET http://example.test/ HT")); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := clientConn.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("expected the proxy to close the idle connection, got %v", err)
+	}
+}
+
+func TestHTTPServerReadDeadlineClearedForTunnel(t *testing.T) {
+	setReadRequestTimeout(t, 100*time.Millisecond)
+	echo := startEchoServer(t)
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, echo)
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := clientConn.Write([]byte("CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	rd := bufio.NewReader(clientConn)
+	for {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+
+	// Stay idle for longer than the request timeout, then use the tunnel.
+	time.Sleep(300 * time.Millisecond)
+	if _, err := clientConn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(rd, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("tunnel closed by the request read deadline: %q, %v", buf, err)
+	}
+}
