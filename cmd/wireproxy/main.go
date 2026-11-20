@@ -235,8 +235,8 @@ func main() {
 
 	err := parser.Parse(args)
 	if err != nil {
-		fmt.Print(parser.Usage(err))
-		return
+		fmt.Fprint(os.Stderr, parser.Usage(err))
+		os.Exit(2)
 	}
 
 	if *printVerison {

@@ -64,6 +64,8 @@ Arguments:
                     validity.
 ```
 
+Invalid arguments print the usage to stderr and exit with status 2.
+
 ## Log levels
 
 `--log-level` controls how much wireproxy prints to stderr:
