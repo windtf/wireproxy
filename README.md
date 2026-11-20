@@ -243,6 +243,7 @@ ResolveStrategy = auto
 # Cache successful DNS lookups for this many seconds (default `0`: no cache).
 # Repeat connections to the same hostname skip the DNS round trip, but a changed
 # IP is only seen up to `CacheTTL` seconds late. 60 is a reasonable value.
+# The cache applies to all tunnelled hostname dials (HTTP, SNI, SOCKS5) and TCP tunnels.
 CacheTTL = 60
 ```
 

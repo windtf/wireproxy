@@ -173,13 +173,23 @@ func (passthroughResolver) Resolve(ctx context.Context, name string) (context.Co
 	return ctx, nil, nil
 }
 
+// tunnelDial dials address through the tunnel. Hostnames are resolved through the
+// DNS cache (when [Resolve] CacheTTL is set) instead of netstack's own uncached lookup.
+func (d VirtualTun) tunnelDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if d.SystemDNS {
+		// netstack has no DNS servers in this mode; leave its behaviour unchanged
+		return d.Tnet.DialContext(ctx, network, address)
+	}
+	return dialCached(ctx, d.cache, d.Tnet.LookupContextHost, d.Tnet.DialContext, network, address)
+}
+
 // RoutedDial returns a dialer that sends whitelisted hosts through the tunnel
 // and dials everything else directly. Used by the HTTP and SNI proxies, whose
 // dial callbacks receive the destination hostname intact.
 func (d VirtualTun) RoutedDial(router *DomainRouter) func(network, address string) (net.Conn, error) {
 	return func(network, address string) (net.Conn, error) {
 		if router.route(hostFromAddr(address)) {
-			return d.Tnet.Dial(network, address)
+			return d.tunnelDial(context.Background(), network, address)
 		}
 		return net.Dial(network, address)
 	}
@@ -195,7 +205,7 @@ func (d VirtualTun) routedSocks5Dial(router *DomainRouter) func(context.Context,
 			host = hostFromAddr(address)
 		}
 		if router.route(host) {
-			return d.Tnet.DialContext(ctx, network, address)
+			return d.tunnelDial(ctx, network, address)
 		}
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, network, address)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -186,5 +188,151 @@ func TestVirtualTunCopiesShareCache(t *testing.T) {
 	copyVT := vt
 	if vt.cache != copyVT.cache {
 		t.Fatal("expected copies of VirtualTun to share one cache")
+	}
+}
+
+type fakeDialer struct {
+	mu    sync.Mutex
+	calls []string
+	fail  map[string]bool
+}
+
+func (f *fakeDialer) dial(_ context.Context, network, address string) (net.Conn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, network+" "+address)
+	if f.fail[address] {
+		return nil, errors.New("dial failed")
+	}
+	c, _ := net.Pipe()
+	return c, nil
+}
+
+func countingLookup(calls *int, addrs ...string) func(context.Context, string) ([]string, error) {
+	return func(context.Context, string) ([]string, error) {
+		*calls++
+		return addrs, nil
+	}
+}
+
+func TestDialCachedUsesCache(t *testing.T) {
+	c, _ := newTestDNSCache(time.Minute)
+	lookups := 0
+	d := &fakeDialer{}
+
+	for i := 0; i < 2; i++ {
+		conn, err := dialCached(context.Background(), c, countingLookup(&lookups, "1.2.3.4"), d.dial, "tcp", "example.com:443")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+	}
+	if lookups != 1 {
+		t.Fatalf("expected 1 lookup, got %d", lookups)
+	}
+	if want := []string{"tcp 1.2.3.4:443", "tcp 1.2.3.4:443"}; !slices.Equal(d.calls, want) {
+		t.Fatalf("dials = %v, want %v", d.calls, want)
+	}
+}
+
+func TestDialCachedFamilyFilter(t *testing.T) {
+	tests := []struct {
+		network string
+		want    []string
+	}{
+		{"tcp", []string{"tcp 1.2.3.4:80"}},
+		{"tcp4", []string{"tcp4 1.2.3.4:80"}},
+		{"tcp6", []string{"tcp6 [2001:db8::1]:80"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.network, func(t *testing.T) {
+			c, _ := newTestDNSCache(time.Minute)
+			lookups := 0
+			d := &fakeDialer{}
+			addrs := []string{"1.2.3.4", "2001:db8::1"}
+			conn, err := dialCached(context.Background(), c, countingLookup(&lookups, addrs...), d.dial, tt.network, "example.com:80")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.Close()
+			if !slices.Equal(d.calls, tt.want) {
+				t.Fatalf("dials = %v, want %v", d.calls, tt.want)
+			}
+		})
+	}
+}
+
+func TestDialCachedNoSuitableAddress(t *testing.T) {
+	c, _ := newTestDNSCache(time.Minute)
+	lookups := 0
+	d := &fakeDialer{}
+	if _, err := dialCached(context.Background(), c, countingLookup(&lookups, "1.2.3.4"), d.dial, "tcp6", "example.com:80"); err == nil {
+		t.Fatal("expected an error when no address matches the network")
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("expected no dials, got %v", d.calls)
+	}
+}
+
+func TestDialCachedFallsBackToNextAddress(t *testing.T) {
+	c, _ := newTestDNSCache(time.Minute)
+	lookups := 0
+	d := &fakeDialer{fail: map[string]bool{"1.2.3.4:443": true}}
+
+	conn, err := dialCached(context.Background(), c, countingLookup(&lookups, "1.2.3.4", "5.6.7.8"), d.dial, "tcp", "example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if want := []string{"tcp 1.2.3.4:443", "tcp 5.6.7.8:443"}; !slices.Equal(d.calls, want) {
+		t.Fatalf("dials = %v, want %v", d.calls, want)
+	}
+
+	d = &fakeDialer{fail: map[string]bool{"1.2.3.4:443": true, "5.6.7.8:443": true}}
+	if _, err := dialCached(context.Background(), c, countingLookup(&lookups, "1.2.3.4", "5.6.7.8"), d.dial, "tcp", "example.com:443"); err == nil {
+		t.Fatal("expected an error when every dial fails")
+	}
+}
+
+func TestDialCachedLookupError(t *testing.T) {
+	c, _ := newTestDNSCache(time.Minute)
+	d := &fakeDialer{}
+	lookup := func(context.Context, string) ([]string, error) { return nil, errors.New("no such host") }
+	if _, err := dialCached(context.Background(), c, lookup, d.dial, "tcp", "example.com:443"); err == nil {
+		t.Fatal("expected the lookup error")
+	}
+	if len(d.calls) != 0 {
+		t.Fatalf("expected no dials, got %v", d.calls)
+	}
+}
+
+func TestDialCachedPassthrough(t *testing.T) {
+	c, _ := newTestDNSCache(time.Minute)
+	tests := []struct {
+		name    string
+		cache   *dnsCache
+		address string
+	}{
+		{"nil cache", nil, "example.com:443"},
+		{"ipv4 literal", c, "1.2.3.4:443"},
+		{"ipv6 literal", c, "[2001:db8::1]:443"},
+		{"no port", c, "example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookups := 0
+			d := &fakeDialer{}
+			conn, err := dialCached(context.Background(), tt.cache, countingLookup(&lookups, "9.9.9.9"), d.dial, "tcp", tt.address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.Close()
+			if lookups != 0 {
+				t.Fatalf("expected no lookup, got %d", lookups)
+			}
+			if want := []string{"tcp " + tt.address}; !slices.Equal(d.calls, want) {
+				t.Fatalf("dials = %v, want %v", d.calls, want)
+			}
+		})
 	}
 }

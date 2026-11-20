@@ -2,6 +2,9 @@ package wireproxy
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -77,4 +80,49 @@ func (c *dnsCache) lookup(ctx context.Context, name string, fn func(context.Cont
 		c.entries[key] = dnsCacheEntry{addrs: slices.Clone(addrs), expires: now.Add(c.ttl)}
 	}
 	return addrs, nil
+}
+
+// dialCached dials address, resolving a hostname through cache and trying each
+// returned address in order. It mirrors the loop in netstack's DialContext, which
+// would otherwise do its own uncached lookup. IP literals, a nil cache and
+// unparsable addresses are passed to dial unchanged.
+func dialCached(
+	ctx context.Context,
+	cache *dnsCache,
+	lookup func(context.Context, string) ([]string, error),
+	dial func(ctx context.Context, network, address string) (net.Conn, error),
+	network, address string,
+) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if cache == nil || err != nil {
+		return dial(ctx, network, address)
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return dial(ctx, network, address)
+	}
+
+	addrs, err := cache.lookup(ctx, host, lookup)
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Err: err}
+	}
+
+	var dialErr error
+	for _, saddr := range addrs {
+		ip, err := netip.ParseAddr(saddr)
+		if err != nil {
+			continue
+		}
+		if (ip.Is4() && strings.HasSuffix(network, "6")) || (ip.Is6() && strings.HasSuffix(network, "4")) {
+			continue
+		}
+		conn, err := dial(ctx, network, net.JoinHostPort(saddr, port))
+		if err == nil {
+			return conn, nil
+		}
+		dialErr = err
+	}
+	if dialErr == nil {
+		dialErr = errors.New("no suitable address found for: " + host)
+	}
+	return nil, dialErr
 }
