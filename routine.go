@@ -169,11 +169,25 @@ func (passthroughResolver) Resolve(ctx context.Context, name string) (context.Co
 // and dials everything else directly. Used by the HTTP and SNI proxies, whose
 // dial callbacks receive the destination hostname intact.
 func (d VirtualTun) RoutedDial(router *DomainRouter) func(network, address string) (net.Conn, error) {
+	var direct net.Dialer
+	return routedDial(router, routedDialTimeout, d.Tnet.DialContext, direct.DialContext)
+}
+
+// routedDialTimeout bounds a dial made by RoutedDial. Without it a dead tunnel
+// or target makes the caller wait for the TCP SYN retries (about two minutes in
+// netstack).
+const routedDialTimeout = 30 * time.Second
+
+type dialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+func routedDial(router *DomainRouter, timeout time.Duration, tunnel, direct dialContextFunc) func(network, address string) (net.Conn, error) {
 	return func(network, address string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 		if router.route(hostFromAddr(address)) {
-			return d.Tnet.Dial(network, address)
+			return tunnel(ctx, network, address)
 		}
-		return net.Dial(network, address)
+		return direct(ctx, network, address)
 	}
 }
 
