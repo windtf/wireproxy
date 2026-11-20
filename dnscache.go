@@ -84,7 +84,9 @@ func (c *dnsCache) lookup(ctx context.Context, name string, fn func(context.Cont
 
 // dialCached dials address, resolving a hostname through cache and trying each
 // returned address in order. It mirrors the loop in netstack's DialContext, which
-// would otherwise do its own uncached lookup. IP literals, a nil cache and
+// would otherwise do its own uncached lookup: the context is checked before each
+// attempt, a deadline is shared out across the remaining addresses, and the first
+// dial error is returned if none succeeds. IP literals, a nil cache and
 // unparsable addresses are passed to dial unchanged.
 func dialCached(
 	ctx context.Context,
@@ -106,7 +108,7 @@ func dialCached(
 		return nil, &net.OpError{Op: "dial", Err: err}
 	}
 
-	var dialErr error
+	var suitable []string
 	for _, saddr := range addrs {
 		ip, err := netip.ParseAddr(saddr)
 		if err != nil {
@@ -115,14 +117,59 @@ func dialCached(
 		if (ip.Is4() && strings.HasSuffix(network, "6")) || (ip.Is6() && strings.HasSuffix(network, "4")) {
 			continue
 		}
-		conn, err := dial(ctx, network, net.JoinHostPort(saddr, port))
+		suitable = append(suitable, saddr)
+	}
+	if len(suitable) == 0 {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("no suitable address found for: " + host)}
+	}
+
+	var firstErr error
+	for i, saddr := range suitable {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		dialCtx := ctx
+		if deadline, ok := ctx.Deadline(); ok {
+			attempt, err := attemptDeadline(time.Now(), deadline, len(suitable)-i)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				break
+			}
+			if attempt.Before(deadline) {
+				var cancel context.CancelFunc
+				dialCtx, cancel = context.WithDeadline(ctx, attempt)
+				defer cancel()
+			}
+		}
+
+		conn, err := dial(dialCtx, network, net.JoinHostPort(saddr, port))
 		if err == nil {
 			return conn, nil
 		}
-		dialErr = err
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
-	if dialErr == nil {
-		dialErr = errors.New("no suitable address found for: " + host)
+	return nil, firstErr
+}
+
+// attemptDeadline splits the time left until deadline evenly across the addresses
+// still to try, with a floor of 2s (or whatever remains, if less), like netstack
+// and net.Dialer do.
+func attemptDeadline(now, deadline time.Time, addrsRemaining int) (time.Time, error) {
+	remaining := deadline.Sub(now)
+	if remaining <= 0 {
+		return time.Time{}, context.DeadlineExceeded
 	}
-	return nil, dialErr
+	const floor = 2 * time.Second
+	timeout := remaining / time.Duration(addrsRemaining)
+	if timeout < floor {
+		timeout = min(floor, remaining)
+	}
+	return now.Add(timeout), nil
 }
