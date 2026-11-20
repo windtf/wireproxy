@@ -210,3 +210,14 @@ Address = 10.5.0.2
 		}
 	}
 }
+
+func TestParsePeerStatusesHandshakeKeyOrder(t *testing.T) {
+	ipc := "public_key=aa\nlast_handshake_time_nsec=5\nlast_handshake_time_sec=100\nendpoint=192.0.2.1:51820\n"
+	status := parsePeerStatuses(ipc)["aa"]
+	if status == nil {
+		t.Fatal("peer aa not parsed")
+	}
+	if want := time.Unix(100, 5); !status.lastHandshake.Equal(want) {
+		t.Fatalf("lastHandshake = %v, want %v", status.lastHandshake, want)
+	}
+}

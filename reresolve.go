@@ -26,6 +26,8 @@ type ipcDevice interface {
 type peerStatus struct {
 	endpoint      string
 	lastHandshake time.Time // zero if there has never been a handshake
+	handshakeSec  int64
+	handshakeNsec int64
 }
 
 // parsePeerStatuses extracts the endpoint and last handshake time of every
@@ -33,7 +35,6 @@ type peerStatus struct {
 func parsePeerStatuses(ipc string) map[string]*peerStatus {
 	statuses := make(map[string]*peerStatus)
 	var current *peerStatus
-	var sec, nsec int64
 	for _, line := range strings.Split(ipc, "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
@@ -42,19 +43,26 @@ func parsePeerStatuses(ipc string) map[string]*peerStatus {
 		switch key {
 		case "public_key":
 			current = &peerStatus{}
-			sec, nsec = 0, 0
 			statuses[value] = current
 		case "endpoint":
 			if current != nil {
 				current.endpoint = value
 			}
 		case "last_handshake_time_sec":
-			sec, _ = strconv.ParseInt(value, 10, 64)
-		case "last_handshake_time_nsec":
-			nsec, _ = strconv.ParseInt(value, 10, 64)
-			if current != nil && sec != 0 {
-				current.lastHandshake = time.Unix(sec, nsec)
+			if current != nil {
+				current.handshakeSec, _ = strconv.ParseInt(value, 10, 64)
 			}
+		case "last_handshake_time_nsec":
+			if current != nil {
+				current.handshakeNsec, _ = strconv.ParseInt(value, 10, 64)
+			}
+		}
+	}
+	// The seconds and nanoseconds keys may arrive in either order, so the
+	// handshake time is assembled once the whole response has been read.
+	for _, status := range statuses {
+		if status.handshakeSec != 0 {
+			status.lastHandshake = time.Unix(status.handshakeSec, status.handshakeNsec)
 		}
 	}
 	return statuses
