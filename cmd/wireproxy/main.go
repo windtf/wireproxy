@@ -165,6 +165,22 @@ func logLevels(level string, silent bool) (wireproxy.LogLevel, int) {
 	}
 }
 
+// validateInfoAddr checks that the -i value is empty (disabled) or host:port
+// with a numeric port, so a typo is a usage error rather than a panic later.
+func validateInfoAddr(args []string) error {
+	if len(args) != 1 || args[0] == "" {
+		return nil
+	}
+	_, port, err := net.SplitHostPort(args[0])
+	if err != nil {
+		return err
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
+}
+
 func extractPort(addr string) uint16 {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -229,7 +245,7 @@ func main() {
 	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode, same as --log-level error"})
 	logLevel := parser.Selector("l", "log-level", []string{"error", "info", "debug"}, &argparse.Options{Help: "Log level", Default: "info"})
 	daemon := parser.Flag("d", "daemon", &argparse.Options{Help: "Make wireproxy run in background"})
-	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status"})
+	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status", Validate: validateInfoAddr})
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
 	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
 

@@ -240,3 +240,29 @@ func TestInfoListenFailureExitsOne(t *testing.T) {
 		t.Errorf("stack trace printed: %s", stderr)
 	}
 }
+
+func TestValidateInfoAddr(t *testing.T) {
+	for _, addr := range []string{"", "127.0.0.1:9080", ":9080", "[::1]:9080", "localhost:0"} {
+		if err := validateInfoAddr([]string{addr}); err != nil {
+			t.Errorf("%q: unexpected error: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{"nohostport", "9080", "host:", "host:abc", "host:65536", "host:-1"} {
+		if err := validateInfoAddr([]string{addr}); err == nil {
+			t.Errorf("%q: expected an error", addr)
+		}
+	}
+}
+
+func TestMalformedInfoAddrIsUsageError(t *testing.T) {
+	path := writeTestConfig(t)
+	for _, addr := range []string{"nohostport", "127.0.0.1:http", "127.0.0.1:70000"} {
+		code, _, stderr := runMain(t, "-c "+path+" -i "+addr)
+		if code != 2 {
+			t.Errorf("%q: exit code = %d, want 2", addr, code)
+		}
+		if !strings.Contains(stderr, "usage: wireproxy") || strings.Contains(stderr, "panic") {
+			t.Errorf("%q: stderr = %q", addr, stderr)
+		}
+	}
+}
