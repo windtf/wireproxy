@@ -149,6 +149,38 @@ func lock(stage string, roFilles ...string) {
 	}
 }
 
+// logLevels maps the command line options to wireproxy's and wireguard-go's
+// log levels. -s is an alias for --log-level error.
+func logLevels(level string, silent bool) (wireproxy.LogLevel, int) {
+	if silent {
+		level = "error"
+	}
+	switch level {
+	case "error":
+		return wireproxy.LogError, device.LogLevelError
+	case "debug":
+		return wireproxy.LogDebug, device.LogLevelVerbose
+	default:
+		return wireproxy.LogInfo, device.LogLevelError
+	}
+}
+
+// validateInfoAddr checks that the -i value is empty (disabled) or host:port
+// with a numeric port, so a typo is a usage error rather than a panic later.
+func validateInfoAddr(args []string) error {
+	if len(args) != 1 || args[0] == "" {
+		return nil
+	}
+	_, port, err := net.SplitHostPort(args[0])
+	if err != nil {
+		return err
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return fmt.Errorf("invalid port %q", port)
+	}
+	return nil
+}
+
 func extractPort(addr string) uint16 {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -189,7 +221,7 @@ func lockNetwork(sections []wireproxy.RoutineSpawner, infoAddr *string) {
 
 func main() {
 	s := make(chan os.Signal, 1)
-	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT)
+	signal.Notify(s, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
@@ -210,16 +242,17 @@ func main() {
 	parser := argparse.NewParser("wireproxy", "Userspace wireguard client for proxying")
 
 	config := parser.String("c", "config", &argparse.Options{Help: "Path of configuration file"})
-	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode"})
+	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode, same as --log-level error"})
+	logLevel := parser.Selector("l", "log-level", []string{"error", "info", "debug"}, &argparse.Options{Help: "Log level", Default: "info"})
 	daemon := parser.Flag("d", "daemon", &argparse.Options{Help: "Make wireproxy run in background"})
-	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status"})
+	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status", Validate: validateInfoAddr})
 	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
 	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
 
 	err := parser.Parse(args)
 	if err != nil {
-		fmt.Print(parser.Usage(err))
-		return
+		fmt.Fprint(os.Stderr, parser.Usage(err))
+		os.Exit(2)
 	}
 
 	if *printVerison {
@@ -231,8 +264,9 @@ func main() {
 		if path, config_exist := configFilePath(); config_exist {
 			*config = path
 		} else {
-			fmt.Println("configuration path is required")
-			return
+			fmt.Fprintln(os.Stderr, "configuration path is required")
+			fmt.Fprint(os.Stderr, parser.Usage(nil))
+			os.Exit(2)
 		}
 	}
 
@@ -263,7 +297,8 @@ func main() {
 		cmd := exec.Command(exePath, args...)
 		err = cmd.Start()
 		if err != nil {
-			fmt.Println(err.Error())
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
 		}
 		return
 	}
@@ -272,14 +307,12 @@ func main() {
 	// https://github.com/WireGuard/wireguard-go/blob/master/device/logger.go#L39
 	// so redirect STDOUT to STDERR, we don't want to print anything to STDOUT anyways
 	os.Stdout = os.Stderr
-	logLevel := device.LogLevelVerbose
-	if *silent {
-		logLevel = device.LogLevelSilent
-	}
+	wireproxyLogLevel, deviceLogLevel := logLevels(*logLevel, *silent)
+	wireproxy.SetLogLevel(wireproxyLogLevel)
 
 	lock("ready", tlsFilePaths(conf.Routines)...)
 
-	tun, err := wireproxy.StartWireguard(conf, logLevel)
+	tun, err := wireproxy.StartWireguard(conf, deviceLogLevel)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -294,7 +327,7 @@ func main() {
 		go func() {
 			err := http.ListenAndServe(*info, tun)
 			if err != nil {
-				panic(err)
+				log.Fatal(err)
 			}
 		}()
 	}
