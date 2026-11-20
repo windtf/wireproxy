@@ -56,6 +56,28 @@ func (r activityReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// idleConn calls reset after every read or write that moved data.
+type idleConn struct {
+	net.Conn
+	reset func()
+}
+
+func (c idleConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.reset()
+	}
+	return n, err
+}
+
+func (c idleConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		c.reset()
+	}
+	return n, err
+}
+
 type proxyState struct {
 	a, b io.ReadWriteCloser
 	idle *time.Timer

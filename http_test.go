@@ -2,6 +2,7 @@ package wireproxy
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -459,5 +460,240 @@ func TestHTTPServerPlainRequestUsesOneOriginConnection(t *testing.T) {
 	}
 	if n := requests.Load(); n != 1 {
 		t.Fatalf("origin saw %d requests, want 1", n)
+	}
+}
+
+// startRawOrigin accepts connections and hands each to handle.
+func startRawOrigin(t *testing.T, handle func(conn net.Conn)) *HTTPServer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				handle(conn)
+			}()
+		}
+	}()
+	return &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, ln.Addr().String())
+		},
+	}
+}
+
+func TestHTTPServerPlainRequestChunkedBody(t *testing.T) {
+	type seen struct {
+		body string
+		te   []string
+	}
+	got := make(chan seen, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got <- seen{string(body), r.TransferEncoding}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer ts.Close()
+
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, ts.Listener.Addr().String())
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	raw := "POST http://a.test/upload HTTP/1.1\r\nHost: a.test\r\nTransfer-Encoding: chunked\r\n\r\n" +
+		"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+	if _, err := clientConn.Write([]byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(clientConn), nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("response: %v, %v", resp, err)
+	}
+
+	select {
+	case s := <-got:
+		if s.body != "hello world" || len(s.te) != 1 || s.te[0] != "chunked" {
+			t.Fatalf("origin saw %+v", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("origin did not receive the request")
+	}
+}
+
+func TestHTTPServerExpectContinue(t *testing.T) {
+	// net/http answers "100 Continue" when the handler reads the body.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_, _ = w.Write([]byte("got " + string(body)))
+	}))
+	defer ts.Close()
+
+	server := &HTTPServer{
+		dial: func(network, address string) (net.Conn, error) {
+			return net.Dial(network, ts.Listener.Addr().String())
+		},
+	}
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	headers := "POST http://a.test/ HTTP/1.1\r\nHost: a.test\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n"
+	if _, err := clientConn.Write([]byte(headers)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Like curl, send the body only after the 100 Continue.
+	rd := bufio.NewReader(clientConn)
+	interim, err := http.ReadResponse(rd, nil)
+	if err != nil {
+		t.Fatalf("no interim response before the body was sent: %v", err)
+	}
+	if interim.StatusCode != http.StatusContinue {
+		t.Fatalf("interim status %d", interim.StatusCode)
+	}
+	if _, err := clientConn.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(rd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "got hello" {
+		t.Fatalf("final response %d %q", resp.StatusCode, body)
+	}
+}
+
+func TestHTTPServerUpgrade(t *testing.T) {
+	server := startRawOrigin(t, func(conn net.Conn) {
+		br := bufio.NewReader(conn)
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			return
+		}
+		if req.Header.Get("Upgrade") != "websocket" || !strings.EqualFold(req.Header.Get("Connection"), "Upgrade") ||
+			req.Header.Get("Proxy-Authorization") != "" {
+			_, _ = conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+			return
+		}
+		// "frame" is sent in the same write as the 101.
+		_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\nframe"))
+		_, _ = io.Copy(conn, br)
+	})
+	server.auth = CredentialValidator{"u", "p"}
+	server.authRequired = true
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	raw := "GET http://a.test/ws HTTP/1.1\r\nHost: a.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
+		"Proxy-Authorization: Basic dTpw\r\nProxy-Connection: keep-alive\r\n\r\n"
+	if _, err := clientConn.Write([]byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+
+	rd := bufio.NewReader(clientConn)
+	resp, err := http.ReadResponse(rd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols || resp.Header.Get("Upgrade") != "websocket" {
+		t.Fatalf("response %d %v", resp.StatusCode, resp.Header)
+	}
+
+	buf := make([]byte, len("frame"))
+	if _, err := io.ReadFull(rd, buf); err != nil || string(buf) != "frame" {
+		t.Fatalf("bytes after the 101 were lost: %q, %v", buf, err)
+	}
+	if _, err := clientConn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	buf = make([]byte, 4)
+	if _, err := io.ReadFull(rd, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("tunnel did not echo: %q, %v", buf, err)
+	}
+}
+
+// An origin that ignores "Connection: close" and keeps the connection open
+// must not keep the client waiting after a complete response.
+func TestHTTPServerPlainResponseEndsAtFraming(t *testing.T) {
+	server := startRawOrigin(t, func(conn net.Conn) {
+		_, _ = http.ReadRequest(bufio.NewReader(conn))
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"))
+		_, _ = io.Copy(io.Discard, conn) // never closes by itself
+	})
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := clientConn.Write([]byte("GET http://a.test/ HTTP/1.1\r\nHost: a.test\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	all, err := io.ReadAll(clientConn)
+	if err != nil {
+		t.Fatalf("client connection was not closed after the response: %v", err)
+	}
+	if !strings.HasSuffix(string(all), "\r\n\r\nok") {
+		t.Fatalf("unexpected response %q", all)
+	}
+}
+
+// An origin that stalls mid-response is cut off after the idle timeout.
+func TestHTTPServerPlainResponseIdleTimeout(t *testing.T) {
+	setProxyIdleTimeout(t, 100*time.Millisecond)
+	server := startRawOrigin(t, func(conn net.Conn) {
+		_, _ = http.ReadRequest(bufio.NewReader(conn))
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\npart"))
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	addr := startTestProxy(t, server)
+
+	clientConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientConn.Close() }()
+	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := clientConn.Write([]byte("GET http://a.test/ HTTP/1.1\r\nHost: a.test\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	// The truncated response ends in an error or EOF, not a deadline timeout.
+	_, err = io.ReadAll(clientConn)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("proxy did not cut off the stalled origin: %v", err)
 	}
 }
