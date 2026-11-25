@@ -42,24 +42,20 @@ of wireproxy by [@artem-russkikh](https://github.com/artem-russkikh).
 ./wireproxy [-c path to config]
 ```
 
-```bash
-usage: wireproxy [-h|--help] [-c|--config "<value>"] [-s|--silent]
-                 [-d|--daemon] [-i|--info "<value>"] [-v|--version]
-                 [-n|--configtest]
+```
+Usage: wireproxy [options]
 
-                 Userspace wireguard client for proxying
+Userspace wireguard client for proxying
 
-Arguments:
-
-  -h  --help        Print help information
-  -c  --config      Path of configuration file
-                    Default paths: /etc/wireproxy/wireproxy.conf, $HOME/.config/wireproxy.conf
-  -s  --silent      Silent mode
-  -d  --daemon      Make wireproxy run in background
-  -i  --info        Specify the address and port for exposing health status
-  -v  --version     Print version
-  -n  --configtest  Configtest mode. Only check the configuration file for
-                    validity.
+Options:
+  -c, --config <path>     Path of configuration file
+                          Default paths: /etc/wireproxy/wireproxy.conf, $HOME/.config/wireproxy.conf
+  -s, --silent            Silent mode
+  -d, --daemon            Make wireproxy run in background
+  -i, --info <addr:port>  Specify the address and port for exposing health status
+  -v, --version           Print version
+  -n, --configtest        Configtest mode. Only check the configuration file for validity.
+  -h, --help              Print help information
 ```
 
 # Build instruction

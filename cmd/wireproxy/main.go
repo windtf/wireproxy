@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -10,14 +12,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 
-	"github.com/akamensky/argparse"
 	"github.com/rrampage/wireproxy"
 	"golang.zx2c4.com/wireguard/device"
-	"suah.dev/protect"
 )
 
 // an argument to denote that this process was spawned by -d
@@ -31,6 +32,95 @@ var default_config_paths = []string{
 
 var version = "1.1.3"
 
+const usage = `Usage: wireproxy [options]
+
+Userspace wireguard client for proxying
+
+Options:
+  -c, --config <path>     Path of configuration file
+                          Default paths: /etc/wireproxy/wireproxy.conf, $HOME/.config/wireproxy.conf
+  -s, --silent            Silent mode
+  -d, --daemon            Make wireproxy run in background
+  -i, --info <addr:port>  Specify the address and port for exposing health status
+  -v, --version           Print version
+  -n, --configtest        Configtest mode. Only check the configuration file for validity.
+  -h, --help              Print help information
+`
+
+type options struct {
+	config     string
+	info       string
+	silent     bool
+	daemon     bool
+	version    bool
+	configTest bool
+}
+
+// boolShortFlags are the single-letter boolean flags that may be grouped.
+const boolShortFlags = "sdvn"
+
+// expandShortFlags turns "-sd" into "-s", "-d" when every letter is a
+// boolean short flag, matching what argparse accepted. Anything else,
+// including groups with an unknown letter or a value option (-sx, -snc), is
+// left for flag to handle or reject. Arguments after "--" are untouched.
+func expandShortFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i, a := range args {
+		if a == "--" {
+			return append(out, args[i:]...)
+		}
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' && strings.Trim(a[1:], boolShortFlags) == "" {
+			for _, c := range a[1:] {
+				out = append(out, "-"+string(c))
+			}
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// parseArgs parses command-line arguments (without the program name). Each
+// option is registered under both its short and long name, so -c, --c,
+// -config and --config (with a space or "=" before the value) all work.
+// Grouped boolean short flags such as -sd are expanded first.
+func parseArgs(args []string) (*options, error) {
+	var o options
+	fs := flag.NewFlagSet("wireproxy", flag.ContinueOnError)
+	fs.Usage = func() { _, _ = fmt.Fprint(fs.Output(), usage) }
+
+	for _, name := range []string{"c", "config"} {
+		fs.StringVar(&o.config, name, "", "")
+	}
+	for _, name := range []string{"i", "info"} {
+		fs.StringVar(&o.info, name, "", "")
+	}
+	for _, f := range []struct {
+		names []string
+		dst   *bool
+	}{
+		{[]string{"s", "silent"}, &o.silent},
+		{[]string{"d", "daemon"}, &o.daemon},
+		{[]string{"v", "version"}, &o.version},
+		{[]string{"n", "configtest"}, &o.configTest},
+	} {
+		for _, name := range f.names {
+			fs.BoolVar(f.dst, name, false, "")
+		}
+	}
+
+	if err := fs.Parse(expandShortFlags(args)); err != nil {
+		return nil, err
+	}
+	if fs.NArg() > 0 {
+		err := fmt.Errorf("unexpected arguments: %v", fs.Args())
+		_, _ = fmt.Fprintln(fs.Output(), err)
+		fs.Usage()
+		return nil, err
+	}
+	return &o, nil
+}
+
 func panicIfError(err error) {
 	if err != nil {
 		log.Fatal(err)
@@ -40,13 +130,13 @@ func panicIfError(err error) {
 // attempts to pledge and panic if it fails
 // this does nothing on non-OpenBSD systems
 func pledgeOrPanic(promises string) {
-	panicIfError(protect.Pledge(promises))
+	panicIfError(pledge(promises))
 }
 
 // attempts to unveil and panic if it fails
 // this does nothing on non-OpenBSD systems
 func unveilOrPanic(path string, flags string) {
-	panicIfError(protect.Unveil(path, flags))
+	panicIfError(unveil(path, flags))
 }
 
 // get the executable path via syscalls or infer it from argv
@@ -209,58 +299,50 @@ func main() {
 		args = []string{args[0]}
 		args = append(args, os.Args[2:]...)
 	}
-	parser := argparse.NewParser("wireproxy", "Userspace wireguard client for proxying")
-
-	config := parser.String("c", "config", &argparse.Options{Help: "Path of configuration file"})
-	silent := parser.Flag("s", "silent", &argparse.Options{Help: "Silent mode"})
-	daemon := parser.Flag("d", "daemon", &argparse.Options{Help: "Make wireproxy run in background"})
-	info := parser.String("i", "info", &argparse.Options{Help: "Specify the address and port for exposing health status"})
-	printVerison := parser.Flag("v", "version", &argparse.Options{Help: "Print version"})
-	configTest := parser.Flag("n", "configtest", &argparse.Options{Help: "Configtest mode. Only check the configuration file for validity."})
-
-	err := parser.Parse(args)
+	opts, err := parseArgs(args[1:])
 	if err != nil {
-		fmt.Print(parser.Usage(err))
-		return
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		os.Exit(2)
 	}
-
-	if *printVerison {
+	if opts.version {
 		fmt.Printf("wireproxy, version %s\n", version)
 		return
 	}
 
-	if *config == "" {
+	if opts.config == "" {
 		if path, config_exist := configFilePath(); config_exist {
-			*config = path
+			opts.config = path
 		} else {
 			fmt.Println("configuration path is required")
 			return
 		}
 	}
 
-	if !*daemon {
+	if !opts.daemon {
 		lock("read-config")
 	}
 
-	conf, err := wireproxy.ParseConfig(*config)
+	conf, err := wireproxy.ParseConfig(opts.config)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if *configTest {
+	if opts.configTest {
 		fmt.Println("Config OK")
 		return
 	}
 
-	lockNetwork(conf.Routines, info)
+	lockNetwork(conf.Routines, &opts.info)
 
 	if isDaemonProcess {
 		os.Stdout, _ = os.Open(os.DevNull)
 		os.Stderr, _ = os.Open(os.DevNull)
-		*daemon = false
+		opts.daemon = false
 	}
 
-	if *daemon {
+	if opts.daemon {
 		args[0] = daemonProcess
 		cmd := exec.Command(exePath, args...)
 		err = cmd.Start()
@@ -275,7 +357,7 @@ func main() {
 	// so redirect STDOUT to STDERR, we don't want to print anything to STDOUT anyways
 	os.Stdout = os.Stderr
 	logLevel := device.LogLevelVerbose
-	if *silent {
+	if opts.silent {
 		logLevel = device.LogLevelSilent
 	}
 
@@ -292,9 +374,9 @@ func main() {
 
 	tun.StartPingIPs()
 
-	if *info != "" {
+	if opts.info != "" {
 		go func() {
-			err := http.ListenAndServe(*info, tun)
+			err := http.ListenAndServe(opts.info, tun)
 			if err != nil {
 				panic(err)
 			}

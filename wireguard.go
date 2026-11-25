@@ -7,7 +7,6 @@ import (
 
 	"net/netip"
 
-	"github.com/MakeNowJust/heredoc/v2"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun/netstack"
@@ -32,11 +31,7 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 	}
 
 	for _, peer := range conf.Peers {
-		fmt.Fprintf(&request, heredoc.Doc(`
-				public_key=%s
-				persistent_keepalive_interval=%d
-				preshared_key=%s
-			`),
+		fmt.Fprintf(&request, "public_key=%s\npersistent_keepalive_interval=%d\npreshared_key=%s\n",
 			peer.PublicKey, peer.KeepAlive, peer.PreSharedKey,
 		)
 		if peer.Endpoint != nil {
@@ -48,10 +43,7 @@ func CreateIPCRequest(conf *DeviceConfig) (*DeviceSetting, error) {
 				fmt.Fprintf(&request, "allowed_ip=%s\n", ip.String())
 			}
 		} else {
-			request.WriteString(heredoc.Doc(`
-				allowed_ip=0.0.0.0/0
-				allowed_ip=::0/0
-			`))
+			request.WriteString("allowed_ip=0.0.0.0/0\nallowed_ip=::0/0\n")
 		}
 	}
 
