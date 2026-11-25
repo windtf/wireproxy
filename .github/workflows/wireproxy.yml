@@ -1,52 +1,150 @@
-name: Cross compile WireProxy
+name: Release
 
 on:
-  workflow_dispatch:
-  create:
   push:
     tags:
       - "v*"
 
+permissions: {}
+
 jobs:
-  WireProxy:
-
-    name: Cross compile WireProxy
-
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-    env:
-      workdir: ./WireProxy
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@master
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Git clone WireProxy
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Validate release tag
+        shell: bash
         run: |
-          git clone https://github.com/rrampage/wireproxy.git ${{ env.workdir }}
-          cp ./.github/wireproxy-releaser.yml ${{ env.workdir }}/.goreleaser.yml
+          set -euo pipefail
 
-      - name: Set up GoReleaser
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
+          # Require exact semantic-version tags: v1.2.3
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
-        with:
-          distribution: goreleaser
-          workdir: ${{ env.workdir }}
-          version: latest
-          args: release --clean
+          # Only release commits that exist on master.
+          git fetch --no-tags origin master
+
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "Release tag does not point to a commit on master" >&2
+            exit 1
+          fi
+
+      - name: Build release binaries
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
 
-      - name: Release binaries
-        uses: softprops/action-gh-release@v1
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          rm -rf dist
+          mkdir dist
+
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "linux riscv64"
+            "darwin amd64"
+            "darwin arm64"
+            "windows amd64"
+          )
+
+          for target in "${targets[@]}"; do
+            read -r GOOS GOARCH <<< "$target"
+            BINARY="wireproxy"
+
+            if [[ "$GOOS" == "windows" ]]; then
+              BINARY="${BINARY}.exe"
+            fi
+
+            WORKDIR="build/${GOOS}_${GOARCH}"
+            mkdir -p "$WORKDIR"
+
+            GOOS="${GOOS}" \
+            GOARCH="${GOARCH}" \
+              go build \
+                -trimpath \
+                -ldflags "-s -w -X main.version=$VERSION" \
+                -o "${WORKDIR}/${BINARY}" \
+                ./cmd/wireproxy
+
+            tar -C "$WORKDIR" \
+              -czf "dist/wireproxy_${GOOS}_${GOARCH}.tar.gz" \
+              "${BINARY}"
+          done
+
+          (
+            cd dist
+            sha256sum wireproxy_*.tar.gz > checksums.txt
+          )
+
+      - name: Store release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          tag_name: wireproxy
-          files: ${{ env.workdir }}/dist/*.tar.gz
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Verify assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for target in linux_amd64 linux_arm64 linux_riscv64 darwin_amd64 darwin_arm64 windows_amd64; do
+            test -f "dist/wireproxy_${target}.tar.gz"
+          done
+          test -f "dist/checksums.txt"
+
+          cd dist
+          sha256sum -c checksums.txt
+
+      - name: Create GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            dist/wireproxy_*.tar.gz \
+            dist/checksums.txt
