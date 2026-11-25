@@ -12,10 +12,10 @@ import (
 func runAssociateExchange(t *testing.T, reply []byte, config *UpstreamSocksConfig) (string, int, error) {
 	t.Helper()
 	client, server := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		req := make([]byte, 10)
 		if _, err := io.ReadFull(server, req); err != nil {
 			t.Errorf("failed to read associate request: %v", err)
@@ -26,7 +26,7 @@ func runAssociateExchange(t *testing.T, reply []byte, config *UpstreamSocksConfi
 			t.Errorf("unexpected associate request: %v", req)
 			return
 		}
-		server.Write(reply)
+		_, _ = server.Write(reply)
 	}()
 
 	return upstreamUDPAssociate(client, config)

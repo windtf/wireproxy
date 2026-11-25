@@ -140,7 +140,7 @@ func makeChainedConnectHandler(vt *VirtualTun, upstream *UpstreamSocksConfig) fu
 		// Connect to upstream SOCKS5 via WireGuard
 		upstreamConn, err := vt.Tnet.DialContext(ctx, "tcp", upstream.Address())
 		if err != nil {
-			socks5.SendReply(writer, statute.RepHostUnreachable, nil)
+			_ = socks5.SendReply(writer, statute.RepHostUnreachable, nil)
 			return fmt.Errorf("failed to connect to upstream: %w", err)
 		}
 		defer func() { _ = upstreamConn.Close() }()
@@ -151,13 +151,13 @@ func makeChainedConnectHandler(vt *VirtualTun, upstream *UpstreamSocksConfig) fu
 
 		// Perform SOCKS5 handshake with upstream
 		if err := upstreamHandshake(upstreamConn, upstream); err != nil {
-			socks5.SendReply(writer, statute.RepServerFailure, nil)
+			_ = socks5.SendReply(writer, statute.RepServerFailure, nil)
 			return fmt.Errorf("upstream handshake failed: %w", err)
 		}
 
 		// Send CONNECT request to upstream
 		if err := upstreamConnect(upstreamConn, target); err != nil {
-			socks5.SendReply(writer, statute.RepHostUnreachable, nil)
+			_ = socks5.SendReply(writer, statute.RepHostUnreachable, nil)
 			return fmt.Errorf("upstream connect failed: %w", err)
 		}
 
@@ -174,24 +174,24 @@ func makeChainedConnectHandler(vt *VirtualTun, upstream *UpstreamSocksConfig) fu
 		// upstream instead of tearing the connection down, and wait for BOTH
 		// directions before the deferred Close runs so the upstream's response
 		// is not truncated mid-flight.
-		errCh := make(chan error, 2)
+		copyDone := make(chan struct{}, 2)
 		go func() {
-			_, err := io.Copy(upstreamConn, request.Reader)
+			_, _ = io.Copy(upstreamConn, request.Reader)
 			if cw, ok := upstreamConn.(interface{ CloseWrite() error }); ok {
 				_ = cw.CloseWrite()
 			}
-			errCh <- err
+			copyDone <- struct{}{}
 		}()
 		go func() {
-			_, err := io.Copy(writer, upstreamConn)
+			_, _ = io.Copy(writer, upstreamConn)
 			if cw, ok := writer.(interface{ CloseWrite() error }); ok {
 				_ = cw.CloseWrite()
 			}
-			errCh <- err
+			copyDone <- struct{}{}
 		}()
 
-		<-errCh
-		<-errCh
+		<-copyDone
+		<-copyDone
 		return nil
 	}
 }
@@ -202,7 +202,7 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 		// Connect to upstream SOCKS5 via WireGuard
 		upstreamCtrl, err := vt.Tnet.DialContext(ctx, "tcp", upstream.Address())
 		if err != nil {
-			socks5.SendReply(writer, statute.RepServerFailure, nil)
+			_ = socks5.SendReply(writer, statute.RepServerFailure, nil)
 			return fmt.Errorf("failed to connect to upstream: %w", err)
 		}
 		defer func() { _ = upstreamCtrl.Close() }()
@@ -213,14 +213,14 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 
 		// Perform SOCKS5 handshake with upstream
 		if err := upstreamHandshake(upstreamCtrl, upstream); err != nil {
-			socks5.SendReply(writer, statute.RepServerFailure, nil)
+			_ = socks5.SendReply(writer, statute.RepServerFailure, nil)
 			return fmt.Errorf("upstream handshake failed: %w", err)
 		}
 
 		// Request UDP ASSOCIATE from upstream
 		relayHost, relayPort, err := upstreamUDPAssociate(upstreamCtrl, upstream)
 		if err != nil {
-			socks5.SendReply(writer, statute.RepCommandNotSupported, nil)
+			_ = socks5.SendReply(writer, statute.RepCommandNotSupported, nil)
 			return fmt.Errorf("upstream UDP associate failed: %w", err)
 		}
 
@@ -233,7 +233,7 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 		upstreamRelayAddr := net.JoinHostPort(relayHost, strconv.Itoa(relayPort))
 		upstreamUDP, err := vt.Tnet.DialContext(ctx, "udp", upstreamRelayAddr)
 		if err != nil {
-			socks5.SendReply(writer, statute.RepServerFailure, nil)
+			_ = socks5.SendReply(writer, statute.RepServerFailure, nil)
 			return fmt.Errorf("failed to connect to upstream UDP relay: %w", err)
 		}
 		defer func() { _ = upstreamUDP.Close() }()
@@ -247,7 +247,7 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 		}
 		localUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: relayIP, Port: 0})
 		if err != nil {
-			socks5.SendReply(writer, statute.RepServerFailure, nil)
+			_ = socks5.SendReply(writer, statute.RepServerFailure, nil)
 			return fmt.Errorf("failed to create local UDP listener: %w", err)
 		}
 		defer func() { _ = localUDP.Close() }()
@@ -291,7 +291,7 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 				clientAddrMu.Unlock()
 
 				// Forward to upstream (already SOCKS5 framed from client)
-				upstreamUDP.Write(buf[:n])
+				_, _ = upstreamUDP.Write(buf[:n])
 			}
 		}()
 
@@ -309,7 +309,7 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 				clientAddrMu.RUnlock()
 
 				if addr.IsValid() {
-					localUDP.WriteToUDPAddrPort(buf[:n], addr)
+					_, _ = localUDP.WriteToUDPAddrPort(buf[:n], addr)
 				}
 			}
 		}()
@@ -353,10 +353,12 @@ func makeChainedAssociateHandler(vt *VirtualTun, upstream *UpstreamSocksConfig, 
 // upstreamHandshake performs SOCKS5 handshake with upstream
 func upstreamHandshake(conn net.Conn, config *UpstreamSocksConfig) error {
 	// Send greeting
+	greeting := []byte{0x05, 0x01, 0x00}
 	if config.HasAuth() {
-		conn.Write([]byte{0x05, 0x02, 0x00, 0x02})
-	} else {
-		conn.Write([]byte{0x05, 0x01, 0x00})
+		greeting = []byte{0x05, 0x02, 0x00, 0x02}
+	}
+	if _, err := conn.Write(greeting); err != nil {
+		return err
 	}
 
 	resp := make([]byte, 2)
@@ -379,7 +381,9 @@ func upstreamHandshake(conn net.Conn, config *UpstreamSocksConfig) error {
 		authReq = append(authReq, []byte(config.Username)...)
 		authReq = append(authReq, byte(len(config.Password)))
 		authReq = append(authReq, []byte(config.Password)...)
-		conn.Write(authReq)
+		if _, err := conn.Write(authReq); err != nil {
+			return err
+		}
 
 		authResp := make([]byte, 2)
 		if _, err := io.ReadFull(conn, authResp); err != nil {
@@ -446,13 +450,14 @@ func upstreamConnect(conn net.Conn, target string) error {
 		addrLen = 16
 	case 0x03:
 		lenBuf := make([]byte, 1)
-		io.ReadFull(conn, lenBuf)
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			return err
+		}
 		addrLen = int(lenBuf[0])
 	}
 	discard := make([]byte, addrLen+2)
-	io.ReadFull(conn, discard)
-
-	return nil
+	_, err = io.ReadFull(conn, discard)
+	return err
 }
 
 // upstreamUDPAssociate requests UDP ASSOCIATE from upstream

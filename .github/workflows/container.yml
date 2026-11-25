@@ -22,7 +22,7 @@ jobs:
 
     env:
       CONTAINER_NAME: ghcr.io/${{ github.repository }}
-      BUILD_PLATFORMS: linux/amd64,linux/arm,linux/arm64,linux/ppc64le,linux/s390x
+      BUILD_PLATFORMS: linux/amd64,linux/arm64
       RAW_CONTAINER_TAG: ${{ github.event.inputs.container_tag || github.event.pull_request.head.ref || 'latest' }}
       RAW_REF_NAME: ${{ github.event.pull_request.head.ref || github.ref }}
 

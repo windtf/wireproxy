@@ -47,7 +47,7 @@ func freeTCPPort(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port
 }
 
@@ -58,7 +58,7 @@ func freeUDPPort(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	return c.LocalAddr().(*net.UDPAddr).Port
 }
 
@@ -118,7 +118,7 @@ func warmup(t *testing.T, vtA, vtB *VirtualTun) {
 	if err != nil {
 		t.Fatalf("warmup listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -396,7 +396,7 @@ func startUpstreamSOCKS(t *testing.T, vt *VirtualTun, ip string, port int) *upst
 }
 
 func (u *upstreamSOCKS) handle(vt *VirtualTun, c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// Method negotiation (accept no-auth only).
 	greet := make([]byte, 2)
@@ -438,7 +438,7 @@ func (u *upstreamSOCKS) handle(vt *VirtualTun, c net.Conn) {
 		_, _ = c.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 	_, portStr, _ := net.SplitHostPort(relay.LocalAddr().String())
 	relayPort, _ := strconv.Atoi(portStr)
 
@@ -494,7 +494,7 @@ func TestSocks5UDPEchoThroughTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ctrl.Close()
+	defer func() { _ = ctrl.Close() }()
 	if err := socksNegotiate(ctrl, "", ""); err != nil {
 		t.Fatalf("negotiate: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestSocks5UDPEchoThroughTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer uc.Close()
+	defer func() { _ = uc.Close() }()
 
 	dst := netip.AddrPortFrom(netip.MustParseAddr(e2eBAddr), 5000)
 	udpEchoRoundtrip(t, uc, wrapUDP(dst, []byte("hello tunnel")), "hello tunnel")
@@ -528,7 +528,7 @@ func TestSocks5AuthAcceptReject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer good.Close()
+	defer func() { _ = good.Close() }()
 	if err := socksNegotiate(good, "user", "pass"); err != nil {
 		t.Fatalf("correct credentials rejected: %v", err)
 	}
@@ -537,7 +537,7 @@ func TestSocks5AuthAcceptReject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bad.Close()
+	defer func() { _ = bad.Close() }()
 	if err := socksNegotiate(bad, "user", "wrong"); err == nil {
 		t.Fatal("wrong credentials were accepted")
 	}
@@ -560,7 +560,7 @@ func TestSocks5TunnelUDPEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ctrl.Close()
+	defer func() { _ = ctrl.Close() }()
 	if err := socksNegotiate(ctrl, "", ""); err != nil {
 		t.Fatalf("negotiate: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestSocks5TunnelUDPEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer uc.Close()
+	defer func() { _ = uc.Close() }()
 	udpEchoRoundtrip(t, uc, wrapUDP(dst, []byte("ping chain")), "ping chain")
 	drainUDP(uc) // discard any duplicate echo from a retried round trip
 
@@ -595,7 +595,7 @@ func TestSocks5TunnelUDPEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer badSrc.Close()
+	defer func() { _ = badSrc.Close() }()
 	expectNoEcho(t, badSrc, wrapUDP(dst, []byte("spoofed")))
 }
 
@@ -645,7 +645,7 @@ func TestSocks5TunnelUpstreamTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ctrl.Close()
+	defer func() { _ = ctrl.Close() }()
 	if err := socksNegotiate(ctrl, "", ""); err != nil {
 		t.Fatalf("negotiate: %v", err)
 	}

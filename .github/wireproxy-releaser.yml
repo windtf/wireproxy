@@ -12,19 +12,10 @@ builds:
       - windows
       - darwin
     goarch:
-      - arm
       - arm64
-      - 386
       - amd64
-      - mips
-      - mipsle
-      - s390x
       - riscv64
-    gomips:
-      - softfloat
     ignore:
-      - goos: windows
-        goarch: arm
       - goos: windows
         goarch: arm64
     main: ./cmd/wireproxy/

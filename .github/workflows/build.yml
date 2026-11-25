@@ -89,26 +89,6 @@ jobs:
         with:
           name: WireProxy_linux_arm64
           path: release_linux_arm64
-  linuxS390xBuild:
-    name: Build Linux s390x Version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setting up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-      - name: Building Linux s390x Version
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -o WireProxy_s390x -v ./cmd/wireproxy
-          mkdir release_linux_s390x
-          mv WireProxy_s390x wireproxy
-          cp wireproxy release_linux_s390x/wireproxy
-      - name: Upload Linux s390x Version
-        uses: actions/upload-artifact@v4
-        with:
-          name: WireProxy_linux_s390x
-          path: release_linux_s390x
   darwinAmd64Build:
     name: Build Darwin amd64 Version
     runs-on: ubuntu-latest
