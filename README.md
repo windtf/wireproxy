@@ -73,7 +73,7 @@ make
 # Install
 
 ```bash
-go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.2 # or @latest
+go install github.com/rrampage/wireproxy/cmd/wireproxy@latest
 ```
 
 # Use with VPN

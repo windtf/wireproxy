@@ -1,25 +1,53 @@
 name: golangci-lint
+
 on:
   push:
     branches:
       - '**'
   pull_request:
     branches:
-      - '**'
+      - master
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
+
 jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
     steps:
-      - uses: actions/setup-go@v5
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: '1.26'
-      - uses: actions/checkout@v4
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9.2.0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          version: latest
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install golangci-lint
+        shell: bash
+        env:
+          GOLANGCI_LINT_VERSION: 2.15.0
+          # sha256 of golangci-lint-2.15.0-linux-amd64.tar.gz, from the
+          # release's golangci-lint-2.15.0-checksums.txt
+          GOLANGCI_LINT_SHA256: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
+        run: |
+          set -euo pipefail
+
+          NAME="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64"
+          curl -fsSL -o "$RUNNER_TEMP/${NAME}.tar.gz" \
+            "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/${NAME}.tar.gz"
+          echo "${GOLANGCI_LINT_SHA256}  $RUNNER_TEMP/${NAME}.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/${NAME}.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/${NAME}" >> "$GITHUB_PATH"
+
+      - name: Lint
+        run: golangci-lint run

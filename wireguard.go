@@ -74,11 +74,13 @@ func StartWireguard(conf *Configuration, logLevel int) (*VirtualTun, error) {
 	dev := device.NewDevice(tun, conn.NewDefaultBind(), device.NewLogger(logLevel, ""))
 	err = dev.IpcSet(setting.IpcRequest)
 	if err != nil {
+		dev.Close()
 		return nil, err
 	}
 
 	err = dev.Up()
 	if err != nil {
+		dev.Close()
 		return nil, err
 	}
 

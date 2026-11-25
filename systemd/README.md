@@ -8,7 +8,7 @@ The provided systemd unit assumes you have the wireproxy executable installed on
 
 1. Copy the `wireproxy.service` file from this directory to `/etc/systemd/system/`, or use the following cURL command to download it:
    ```bash
-   curl https://raw.githubusercontent.com/windtf/wireproxy/master/systemd/wireproxy.service | sudo tee /etc/systemd/system/wireproxy.service
+   curl https://raw.githubusercontent.com/rrampage/wireproxy/master/systemd/wireproxy.service | sudo tee /etc/systemd/system/wireproxy.service
    ```
 
 2. If necessary, customize the unit.

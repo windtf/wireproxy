@@ -85,3 +85,42 @@ Endpoint = 192.200.144.22:51820`
 		t.Fatal(err)
 	}
 }
+
+func TestCheckAliveIntervalMustBePositive(t *testing.T) {
+	const config = `
+[Interface]
+PrivateKey = LAr1aNSNF9d0MjwUgAVC4020T0N/E5NUtqVv5EnsSz0=
+Address = 10.5.0.2
+CheckAlive = 1.1.1.1
+CheckAliveInterval = 0
+
+[Peer]
+PublicKey = e8LKAc+f9xEzq9Ar7+MfKRrs+gZ/4yzvpRJLRJ/VJ1w=`
+
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg DeviceConfig
+	if err := ParseInterface(iniData, &cfg); err == nil {
+		t.Fatal("expected non-positive CheckAliveInterval to be rejected")
+	}
+}
+
+func TestInactivityTimeoutCannotBeNegative(t *testing.T) {
+	const config = `
+[UDPProxyTunnel]
+BindAddress = 127.0.0.1:25346
+Target = 1.1.1.1:53
+InactivityTimeout = -1`
+
+	iniData, err := loadIniConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := parseUDPProxyTunnelConfig(iniData.Section("UDPProxyTunnel")); err == nil {
+		t.Fatal("expected negative InactivityTimeout to be rejected")
+	}
+}

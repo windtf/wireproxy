@@ -1,23 +1,40 @@
 name: Test
+
 on:
   push:
     branches:
       - '**'
   pull_request:
     branches:
-      - '**'
+      - master
   workflow_dispatch:
+
+permissions: {}
 
 jobs:
   test:
     name: Test wireproxy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Setting up Go
-        uses: actions/setup-go@v5
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.26"
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Unit and e2e tests
+        run: go test -race ./...
+
       - name: Install dependencies
         run: sudo apt install wireguard curl
       - name: Building wireproxy
@@ -36,6 +53,6 @@ jobs:
         run: curl --proxy http://peter:hunter123@localhost:64424 http://zx2c4.com/ip | grep -q "demo.wireguard.com"
       - name: Test http with wrong password
         run: |
-          set +e
-          curl -s --fail --proxy http://peter:wrongpass@localhost:64425 http://zx2c4.com/ip
-          if [[ $? == 0 ]]; then exit 1; fi
+          if curl -s --fail --proxy http://peter:wrongpass@localhost:64425 http://zx2c4.com/ip; then
+            exit 1
+          fi
