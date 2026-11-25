@@ -15,6 +15,27 @@ type udpSession struct {
 	lastActive    time.Time
 	closeChan     chan struct{}
 	inactivityDur time.Duration
+	closeOnce     sync.Once
+	activityMu    sync.Mutex
+}
+
+func (s *udpSession) touch() {
+	s.activityMu.Lock()
+	s.lastActive = time.Now()
+	s.activityMu.Unlock()
+}
+
+func (s *udpSession) inactive(now time.Time) bool {
+	s.activityMu.Lock()
+	defer s.activityMu.Unlock()
+	return now.Sub(s.lastActive) >= s.inactivityDur
+}
+
+func (s *udpSession) close() {
+	s.closeOnce.Do(func() {
+		close(s.closeChan)
+		_ = s.remoteConn.Close()
+	})
 }
 
 // SpawnRoutine implements the RoutineSpawner interface.
@@ -36,18 +57,10 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 	sessions := make(map[string]*udpSession)
 	var sessionMu sync.Mutex
 
-	closeSessionChan := func(sess *udpSession) {
-		select {
-		case <-sess.closeChan:
-		default:
-			close(sess.closeChan)
-		}
-	}
-
 	removeSession := func(src string, sess *udpSession) {
 		sessionMu.Lock()
 		if current, ok := sessions[src]; ok && current == sess {
-			closeSessionChan(current)
+			current.close()
 			delete(sessions, src)
 		}
 		sessionMu.Unlock()
@@ -62,9 +75,9 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 				now := time.Now()
 				sessionMu.Lock()
 				for key, sess := range sessions {
-					if now.Sub(sess.lastActive) >= inactivityDur {
+					if sess.inactive(now) {
 						log.Printf("UDPProxyTunnel: closing inactive session for %s", key)
-						closeSessionChan(sess)
+						sess.close()
 						delete(sessions, key)
 					}
 				}
@@ -80,7 +93,7 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 
 		// return if session already exists
 		if s, ok := sessions[srcAddr]; ok {
-			s.lastActive = time.Now()
+			s.touch()
 			return s, nil
 		}
 
@@ -120,10 +133,10 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 				continue
 			}
 
-			s.lastActive = time.Now()
 			_, err = s.remoteConn.Write(buf[:n])
 			if err != nil {
 				errorLogger.Printf("UDPProxyTunnel: could not write to remote (%s): %v", conf.Target, err)
+				removeSession(srcKey, s)
 			}
 		}
 	}()
@@ -134,7 +147,6 @@ func (conf *UDPProxyTunnelConfig) SpawnRoutine(vt *VirtualTun) {
 func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, srcAddr string, s *udpSession, removeSession func(string, *udpSession)) {
 	defer func() {
 		removeSession(srcAddr, s)
-		_ = s.remoteConn.Close()
 	}()
 	buf := make([]byte, 64*1024)
 
@@ -145,7 +157,10 @@ func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, src
 		default:
 		}
 
-		_ = s.remoteConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err := s.remoteConn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			errorLogger.Printf("UDPProxyTunnel: could not set remote read deadline: %v", err)
+			return
+		}
 		n, err := s.remoteConn.Read(buf)
 		if err != nil {
 			// If a timeout or temporary error, continue to see if the session is closed
@@ -161,7 +176,7 @@ func (conf *UDPProxyTunnelConfig) handleRemoteToLocal(listener *net.UDPConn, src
 			return
 		}
 
-		s.lastActive = time.Now()
+		s.touch()
 
 		dstUDPAddr, err := net.ResolveUDPAddr("udp", srcAddr)
 		if err != nil {

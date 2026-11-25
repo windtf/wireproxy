@@ -94,6 +94,12 @@ func (s *HTTPServer) handle(req *http.Request) (peer net.Conn, err error) {
 }
 
 func (s *HTTPServer) serve(conn net.Conn) {
+	var handled bool
+	defer func() {
+		if !handled {
+			_ = conn.Close()
+		}
+	}()
 	var rd = bufio.NewReader(conn)
 	req, err := http.ReadRequest(rd)
 	if err != nil {
@@ -124,6 +130,9 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		return
 	}
 	if err != nil {
+		if peer != nil {
+			_ = peer.Close()
+		}
 		log.Printf("dial proxy failed: %s\n", err)
 		return
 	}
@@ -131,6 +140,8 @@ func (s *HTTPServer) serve(conn net.Conn) {
 		log.Println("dial proxy failed: peer nil")
 		return
 	}
+
+	handled = true
 
 	go func() {
 		defer func() { _ = conn.Close() }()
